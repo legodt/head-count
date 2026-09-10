@@ -97,13 +97,25 @@ body{
 .log tr:last-child td{border-bottom:0}
 .log .din{color:#4ad991}.log .dout{color:#ff8b83}
 
-.archive{margin-top:18px}
-.archive h3{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:0 0 8px}
-.arow{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-  padding:10px;margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.arow .who{flex:1 1 140px;min-width:0}
-.arow .who b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.arow .who span{color:var(--dim);font-size:12px}
+/* ---------- events archive ---------- */
+.evsum{color:var(--dim);font-size:12.5px;line-height:1.45;margin:0 0 12px}
+.evsum.full{color:#ffd479}
+.evsum:empty{display:none}
+.evcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:10px;overflow:hidden}
+.evopen{
+  display:block;width:100%;text-align:left;background:none;border:0;color:var(--ink);
+  font:inherit;padding:12px 40px 10px 12px;position:relative
+}
+.evopen::after{content:"\203A";position:absolute;right:14px;top:50%;transform:translateY(-50%);
+  font-size:26px;color:var(--dim)}
+.evopen:active{background:#18212b}
+.evopen b{display:block;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.evopen span{display:block;color:var(--dim);font-size:12.5px;margin-top:2px}
+.evopen .evnums{margin-top:6px}
+.evnums em{font-style:normal;color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
+.evacts{display:flex;gap:8px;padding:0 12px 12px}
+.evacts .mini{flex:1 1 0}
+.evempty{color:var(--dim);text-align:center;margin:48px 12px;font-size:14px;line-height:1.6}
 
 /* ---------- dialog ---------- */
 .dlg{

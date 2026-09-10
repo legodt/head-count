@@ -32,7 +32,12 @@ function clearBanner() { $('warn').hidden = true; storageOk = true; }
 
 /* ---------------- state ---------------- */
 
-const blank = () => ({ id: 's' + Date.now().toString(36), label: '', startedAt: null, endedAt: null, ev: [] });
+// The random suffix matters: ids reconcile an interrupted End event, so two
+// sessions created in the same millisecond must never share one.
+const blank = () => ({
+  id: 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+  label: '', startedAt: null, endedAt: null, ev: [],
+});
 
 function readKey(k) {
   try { const o = JSON.parse(LS.get(k) || 'null'); return o && Array.isArray(o.ev) ? o : null; }
@@ -48,8 +53,7 @@ function loadArch() {
   catch { return []; }
 }
 
-let S = loadActive();
-let ARCH = loadArch();
+let S, ARCH;
 let viewing = null;          // session shown in the data sheet (null = the live one)
 let tick = null, chartTick = null;
 
@@ -70,11 +74,22 @@ function save(forceBackup) {
   }
   if (!storageOk) clearBanner();
 }
-function saveArch() {
-  if (LS.set(K_ARCH, JSON.stringify(ARCH))) return;
-  ARCH = ARCH.slice(0, 10);
-  if (!LS.set(K_ARCH, JSON.stringify(ARCH))) warnBanner('Past events could not be saved. Export the CSV now.');
+// Writes a candidate archive and reads it back. Callers adopt the new list only
+// on success. The archive is never trimmed to make room: deleting an event is
+// the user's decision, made on the Events screen.
+function saveArch(list) {
+  const json = JSON.stringify(list);
+  return LS.set(K_ARCH, json) && LS.get(K_ARCH) === json;
 }
+
+// An End event interrupted between the archive write and the reset leaves the
+// same session in both places. The archive copy is the finished one, so the
+// live slot starts fresh instead of the event being counted twice.
+function reload() {
+  S = loadActive(); ARCH = loadArch();
+  if (ARCH.some(a => a.id === S.id)) { S = blank(); save(true); }
+}
+reload();   // now, before any wiring: nothing below may leave the pads without state
 
 /* ---------------- derived ---------------- */
 
@@ -194,17 +209,22 @@ function undo() {
   toast('Removed last ' + (last[1] > 0 ? 'IN' : 'OUT'));
 }
 
+// Order is the whole point. The event is written into the archive and verified
+// before the live session is reset, so it never exists only in memory. If the
+// archive cannot take it, the event simply stays live.
 function endEvent() {
-  S.endedAt = Date.now();
-  ARCH.unshift(S);
-  if (ARCH.length > 30) ARCH.length = 30;
-  saveArch();
-  const done = S;
+  const done = Object.assign({}, S, { endedAt: Date.now() });
+  const next = [done].concat(ARCH);
+  if (!saveArch(next)) {
+    warnBanner('Storage is full - this event was NOT ended and is still counting. Export its CSV, then delete old events in Events.');
+    return;
+  }
+  ARCH = next;
   S = blank();
   LS.del(K_BAK);
   save(); render();
   viewing = done; openSheet();
-  toast('Event ended and saved');
+  toast('Event ended - saved to Events');
 }
 
 /* ---------------- render ---------------- */
@@ -244,6 +264,7 @@ function openSheet() {
 function closeSheet() {
   $('sheet').hidden = true; viewing = null;
   clearInterval(chartTick); chartTick = null;
+  renderEvents();                   // Events may be underneath
 }
 
 function refreshSheet(full) {
@@ -267,7 +288,7 @@ function refreshSheet(full) {
   $('insight').textContent = narrate(s, a);
   drawChart(s, a);
   drawFlow(s);
-  if (full) { renderTable(s); renderArchive(); }
+  if (full) renderTable(s);
 }
 
 function renderTable(s) {
@@ -288,18 +309,54 @@ function renderTable(s) {
 
 const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-function renderArchive() {
-  const box = $('archive');
-  if (!ARCH.length) { box.innerHTML = ''; return; }
-  box.innerHTML = '<h3>Past events</h3>' + ARCH.map((s, i) => {
-    const f = fold(s);
-    return '<div class="arow"><div class="who"><b>' + esc(titleOf(s)) + '</b><span>' +
-      localOf(s.startedAt || s.endedAt) + ' &middot; ' + hms(durOf(s)) + ' &middot; ' +
-      f.tin + ' in &middot; peak ' + f.peak + '</span></div>' +
-      '<button class="mini" data-view="' + i + '">View</button>' +
-      '<button class="mini" data-csv="' + i + '">CSV</button>' +
-      '<button class="mini danger" data-del="' + i + '">Delete</button></div>';
-  }).join('');
+/* ---------------- events archive ----------------
+   Every ended event stays on the device until the user deletes it. Storage is
+   the only limit, and the screen shows how close to it the device is. */
+
+const QUOTA = 5 * 1024 * 1024;   // Safari's localStorage quota - the tightest mainstream one
+const kb = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+const storedBytes = () => [K_ACTIVE, K_BAK, K_ARCH].reduce((n, k) => n + (LS.get(k) || '').length, 0);
+
+function openEvents() {
+  $('events').hidden = false;
+  $('events').querySelector('.sheetbody').scrollTop = 0;
+  renderEvents();
+}
+function closeEvents() { $('events').hidden = true; }
+
+function renderEvents() {
+  if (!$('events') || $('events').hidden) return;
+  const used = storedBytes(), tight = used / QUOTA > 0.8;
+  const guests = ARCH.reduce((n, s) => n + fold(s).tin, 0);
+  const sum = $('evsum');
+  sum.classList.toggle('full', tight);
+  sum.textContent = !ARCH.length ? '' :
+    `${ARCH.length} ended event${ARCH.length === 1 ? '' : 's'} · ${guests} guests counted · ~${kb(used)} of ~5 MB used on this device` +
+    (tight ? '. Nearly full - export and delete old events.' : '');
+
+  $('evlist').innerHTML = !ARCH.length
+    ? '<p class="evempty">No ended events yet.<br>An event lands here when you tap <b>End event</b>.</p>'
+    : ARCH.map((s, i) => {
+      const a = analyze(s), t0 = s.startedAt || s.endedAt;
+      const day = new Date(t0).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      return '<article class="evcard">' +
+        '<button class="evopen" data-view="' + i + '"><b>' + esc(titleOf(s)) + '</b>' +
+        '<span>' + day + ' · ' + hm(t0) + '–' + hm(s.endedAt) + ' · ' + durShort(a.span) + '</span>' +
+        '<span class="evnums"><em>' + a.tin + '</em> guests · <em>' + a.peak + '</em> peak · <em>' +
+        (a.tin ? durShort(a.avgStay) : '—') + '</em> avg stay</span></button>' +
+        '<div class="evacts"><button class="mini" data-csv="' + i + '">' + (canShareFiles ? 'Share CSV' : 'Download CSV') + '</button>' +
+        '<button class="mini danger" data-del="' + i + '">Delete</button></div></article>';
+    }).join('');
+}
+
+function deleteEvent(i) {
+  const s = ARCH[i];
+  if (!confirm('Delete "' + titleOf(s) + '" permanently? Export its CSV first if you need it.')) return;
+  const next = ARCH.slice(0, i).concat(ARCH.slice(i + 1));
+  if (!saveArch(next)) return warnBanner('Could not delete that event - storage is blocked.');
+  ARCH = next;
+  renderEvents();
+  toast('Event deleted');
 }
 
 /* ---------------- charts ---------------- */
@@ -455,6 +512,13 @@ function downloadCsv(s) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
+// iOS hands a shared file to AirDrop / Mail / Files; downloads from a
+// home-screen web app are clumsy there, so sharing wins wherever it exists.
+const canShareFiles = (() => {
+  try { return !!(navigator.canShare && navigator.canShare({ files: [new File([''], 'a.csv', { type: 'text/csv' })] })); }
+  catch { return false; }
+})();
+
 async function shareCsv(s) {
   if (!s.ev.length) return toast('Nothing to export yet');
   try { await navigator.share({ files: [new File([csvBlob(s)], csvName(s), { type: 'text/csv' })], title: titleOf(s) }); }
@@ -476,64 +540,62 @@ function toast(msg) {
 
 /* ---------------- wiring ---------------- */
 
+// Wire by id, skipping anything absent. A deploy can briefly pair this script
+// with an older page; the pads must keep counting rather than the script dying
+// at the first button it cannot find.
+const on = (id, type, fn) => { const el = $(id); if (el) el.addEventListener(type, fn); };
+
 // pointerdown, not click: the tap must count the instant the finger lands.
 const padHandler = delta => e => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   record(delta, e.currentTarget);
 };
-$('padIn').addEventListener('pointerdown', padHandler(1));
-$('padOut').addEventListener('pointerdown', padHandler(-1));
+on('padIn', 'pointerdown', padHandler(1));
+on('padOut', 'pointerdown', padHandler(-1));
 
-$('btnUndo').addEventListener('click', undo);
-$('btnData').addEventListener('click', () => { viewing = null; openSheet(); });
-$('sheetClose').addEventListener('click', closeSheet);
+on('btnUndo', 'click', undo);
+on('btnData', 'click', () => { viewing = null; openSheet(); });
+on('sheetClose', 'click', closeSheet);
 
-$('label').addEventListener('click', () => {
+on('label', 'click', () => {
   const v = prompt('Name this event', S.label || '');
   if (v === null) return;
   S.label = v.trim().slice(0, 60);
   save(true); render(); refreshSheet(true);
 });
 
-$('btnEnd').addEventListener('click', () => {
+on('btnEnd', 'click', () => {
   const f = fold(S);
   $('dlgSummary').textContent = titleOf(S) + ' - ' + hms(durOf(S)) + ', ' + f.tin + ' in, ' +
     f.tout + ' out, ' + f.occ + ' still inside.';
   $('dlgEnd').showModal();
 });
-$('dlgCancel').addEventListener('click', () => $('dlgEnd').close());
-$('dlgConfirm').addEventListener('click', () => { $('dlgEnd').close(); endEvent(); });
+on('dlgCancel', 'click', () => $('dlgEnd').close());
+on('dlgConfirm', 'click', () => { $('dlgEnd').close(); endEvent(); });
 
-$('btnCsv').addEventListener('click', () => downloadCsv(cur()));
-$('btnCopy').addEventListener('click', () => copyCsv(cur()));
-$('btnShare').addEventListener('click', () => shareCsv(cur()));
-try {
-  if (navigator.canShare && navigator.canShare({ files: [new File([''], 'a.csv', { type: 'text/csv' })] }))
-    $('btnShare').hidden = false;
-} catch {}
+on('btnCsv', 'click', () => downloadCsv(cur()));
+on('btnCopy', 'click', () => copyCsv(cur()));
+on('btnShare', 'click', () => shareCsv(cur()));
+if ($('btnShare')) $('btnShare').hidden = !canShareFiles;
 
-$('archive').addEventListener('click', e => {
+on('btnEvents', 'click', openEvents);
+on('eventsClose', 'click', closeEvents);
+on('evlist', 'click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.dataset.view != null) {
-    viewing = ARCH[+b.dataset.view];
-    $('sheet').querySelector('.sheetbody').scrollTop = 0;
-    refreshSheet(true);
-  } else if (b.dataset.csv != null) {
-    downloadCsv(ARCH[+b.dataset.csv]);
-  } else if (b.dataset.del != null) {
-    const i = +b.dataset.del, s = ARCH[i];
-    if (!confirm('Delete "' + titleOf(s) + '" permanently? Export the CSV first if you need it.')) return;
-    ARCH.splice(i, 1); saveArch();
-    if (viewing === s) viewing = null;
-    refreshSheet(true);
-  }
+  const d = b.dataset;
+  if (d.view != null) { viewing = ARCH[+d.view]; openSheet(); }
+  else if (d.csv != null) { const s = ARCH[+d.csv]; canShareFiles ? shareCsv(s) : downloadCsv(s); }
+  else if (d.del != null) deleteEvent(+d.del);
 });
 
 document.addEventListener('keydown', e => {           // desktop testing
   if ($('dlgEnd').open) return;
   if (e.key === 'ArrowUp' || e.key === 'i') record(1, $('padIn'));
   else if (e.key === 'ArrowDown' || e.key === 'o') record(-1, $('padOut'));
-  else if (e.key === 'Escape' && !$('sheet').hidden) closeSheet();
+  else if (e.key === 'Escape') {
+    if (!$('sheet').hidden) closeSheet();
+    else if ($('events') && !$('events').hidden) closeEvents();
+  }
 });
 
 // Re-read storage on every return to the foreground: the tab may have been
@@ -543,13 +605,13 @@ document.addEventListener('visibilitychange', () => {
   if (!LS.probe()) warnBanner('This browser is not saving your count. Export the CSV before closing this tab.');
   else {
     if (!storageOk) clearBanner();
-    S = loadActive(); ARCH = loadArch();
+    reload();
   }
-  render(); startTick(); refreshSheet(true);
+  render(); startTick(); refreshSheet(true); renderEvents();
 });
-window.addEventListener('pageshow', () => { S = loadActive(); render(); startTick(); });
+window.addEventListener('pageshow', () => { reload(); render(); startTick(); });
 window.addEventListener('storage', e => {
-  if (e.key === K_ACTIVE) { S = loadActive(); render(); refreshSheet(true); }
+  if (e.key === K_ACTIVE || e.key === K_ARCH) { reload(); render(); refreshSheet(true); renderEvents(); }
 });
 window.addEventListener('resize', () => refreshSheet(false));
 

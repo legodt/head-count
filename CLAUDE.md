@@ -19,10 +19,24 @@ shippable forms and nothing is edited inside them.
   disk. Inlines the CSS, JS and favicon; drops the manifest and worker (neither
   works on `file://`). `build.py` refuses to ship if anything failed to inline.
 
-Bump `CACHE` in `sw.js` on **any** shell change or installed clients keep the
-old app. Updates land on a client's **second** launch — the worker serves the
-cached copy first and revalidates behind it, so a dead network never blocks a
-tap.
+Bump `CACHE` in `sw.js` on **any** shell change — it is the only way a change
+reaches installed clients.
+
+**Update safety.** A deploy must never hand a phone a page built from two
+versions.
+- `sw.js` is strictly cache-first and never writes to its cache after install.
+  Install fetches the whole shell with `cache: 'reload'`, past the HTTP cache —
+  GitHub Pages sends `max-age=600`, which would otherwise let a stale `app.js`
+  be baked in beside a new `index.html`. A new `CACHE` installs complete or not
+  at all, and `activate` purges the old one.
+- Clients switch on a later launch, usually the second: the launch that finds
+  the new worker finishes on the old version. The 10-minute max-age on `sw.js`
+  can push the switch one launch further.
+- `app.js` loads state before any wiring and wires every element through
+  `on()`, which skips absent ids, so the pads keep counting even if the script
+  meets an older page. **Never wire with `$(id).addEventListener` directly.**
+  `tests/update.py` proves it against `tests/fixtures/index-v6.html`, the page
+  deployed before Events.
 
 Manifest `start_url` and `scope` are relative (`./`), so a subpath deploy such
 as `user.github.io/head-count/` works — verified, not assumed.
@@ -39,7 +53,8 @@ so the same source runs unmodified in both.
 - Keys: `hc.active.v1` (live session, rewritten on *every* tap),
   `hc.active.bak.v1` (identical copy every 10 taps, **read back to prove the
   write landed**; `loadActive` takes whichever copy parses and holds more taps),
-  `hc.arch.v1` (last 30 ended sessions).
+  `hc.arch.v1` (every ended event, newest first — **never trimmed**; storage
+  is the only limit).
 - All localStorage access goes through `LS`, which never throws. If storage is
   unavailable or a write fails, a persistent amber banner appears telling the
   user to export the CSV — the app keeps counting in memory rather than dying.
@@ -53,11 +68,24 @@ so the same source runs unmodified in both.
   the finger lands. Each tap flashes the pad and vibrates.
 - `Undo` removes the last tap only, and forces a backup write so the backup
   cannot outlive the removed tap.
-- `End event` → confirmation dialog with a summary → archived, counter reset,
-  ended session opened in the data sheet. Not undoable.
+- `End event` → confirmation dialog with a summary → the event is written to
+  the archive **and read back**, and only then is the live count reset; the
+  ended event opens in the data sheet. Not undoable. If the archive write
+  fails (storage full) the event is **not** ended — it stays live, still
+  counting, and a banner says why.
+- An end interrupted between those two writes leaves one session in both
+  slots. `reload()` matches on `id`, keeps the archive copy and resets the
+  live slot — never a duplicate. Ids carry a random suffix so two sessions
+  created in the same millisecond cannot collide.
+- **Events** (main bar) lists every ended event, newest first: name, date,
+  clock span, duration, guests, peak, avg stay. Tapping a card opens its full
+  data sheet, which stacks on top, so Close returns to Events. Per event:
+  Share CSV (Download where file sharing is unavailable) and Delete, behind a
+  confirm. The header shows event count, total guests, and approximate storage
+  used against Safari's 5 MB, turning amber past 80%.
 - Data sheet: six analysis tiles, a one-paragraph plain-English read of the
   night, occupancy chart, arrivals/exits flow chart, CSV export, last 300 taps
-  newest-first, archive list with per-event CSV + delete.
+  newest-first.
 
 ## Analysis (`analyze()` / `narrate()`)
 Derived from the tap log alone — it never identifies anyone, only counts and
@@ -101,7 +129,22 @@ clean. Always the complete log; only the on-screen table is capped at 300.
 python build.py                              # -> docs/ and dist/head-count.html
 python -m http.server 8123 --directory docs  # the deployable build
 python tests/durability.py                   # file:// survival, needs playwright
+python tests/archive.py                      # events archive integrity, needs playwright
+python tests/update.py                       # deploy/update safety, needs playwright
 ```
+`durability.py` and `archive.py` drive `dist/head-count.html`; `update.py` serves
+temporary copies of `docs/`. Run `python build.py` first.
 `tests/durability.py` taps, then reloads, closes and reopens the tab, copies
 the file elsewhere, and relaunches the browser on the same profile — asserting
 the count survives all five.
+
+`tests/archive.py` exercises the archive against a **really filled** quota, not
+a mock: 35 events survive with no cap and unique ids, End refuses when storage
+is full and leaves the event live, an interrupted end resolves without
+duplicating, and deletes persist across a reload.
+
+`tests/update.py` serves copies of `docs/` with HTTP caching off, so anything
+that changes is the worker's doing. It pairs the new script with the previous
+page and checks the pads still count and persist; checks a file changed on the
+server never leaks into the live cache; and checks a `CACHE` bump still
+installs the complete new shell and purges the old.

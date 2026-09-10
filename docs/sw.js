@@ -1,12 +1,19 @@
 /* Offline-first app shell. Bump CACHE whenever a shell file changes. */
-const CACHE = 'headcount-v6';
+const CACHE = 'headcount-v7';
 const SHELL = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/apple-touch-180.png', './icons/icon-512.png', './icons/maskable-512.png'
 ];
 
+// The whole shell goes into a fresh cache in one step, fetched past the HTTP
+// cache. Without `reload` a host's caching headers can bake a stale app.js in
+// beside a new index.html, and a page built from mismatched files may not boot.
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(CACHE)
+      .then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', e => {
@@ -17,20 +24,16 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Cache-first so a dead network never blocks a tap; refresh in the background
-// so a redeploy lands on the next launch.
+// Strictly cache-first, and the cache is never written after install, so every
+// file a page loads comes from one version. Changes arrive only as a new CACHE,
+// which installs complete or not at all. A dead network never blocks a tap.
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(
-    caches.match(req).then(hit => {
-      const net = fetch(req)
-        .then(res => {
-          if (res && res.ok) caches.open(CACHE).then(c => c.put(req, res.clone()));
-          return res;
-        })
-        .catch(() => hit || caches.match('./index.html'));
-      return hit || net;
-    })
+    caches.open(CACHE)
+      .then(c => c.match(req, { ignoreSearch: true }))
+      .then(hit => hit || fetch(req).catch(() =>
+        req.mode === 'navigate' ? caches.open(CACHE).then(c => c.match('./')) : Response.error()))
   );
 });

@@ -3,7 +3,7 @@
 Offline counter for people in and out of a venue across one long event — a
 whole night, phone locked most of it. Plain HTML/CSS/JS, no dependencies, no
 network calls. Two large tap pads, a running occupancy count, a timestamped
-log, flow analytics and a CSV export.
+log, flow analytics, a CSV export, and an archive of every ended event.
 
 `CLAUDE.md` is the behaviour spec. Read it before changing anything.
 
@@ -54,17 +54,35 @@ the phone to the app for the night.
 
 ## After changing the app
 
-Bump `CACHE` in `sw.js`, rerun `python build.py`, commit and push. Installed
-clients pick the update up on their **second** launch — the worker serves the
-cached copy first and refreshes behind it, so a flaky venue network can never
-block a tap.
+Bump `CACHE` in `sw.js`, rerun `python build.py`, commit and push. `CACHE` is
+the only way a change reaches installed phones: the worker serves strictly from
+the cache it installed, so a flaky venue network can never block a tap and a
+page is never assembled from two versions.
+
+Phones switch on a later launch, usually the second — open the app once with a
+connection, close it, open it again. GitHub Pages caches `sw.js` for ten
+minutes, which can push the switch one launch further.
 
 ## Test
 
 ```
+python build.py
 python tests/durability.py
+python tests/archive.py
+python tests/update.py
 ```
 
-Taps, then reloads, closes and reopens the tab, copies the file elsewhere, and
-relaunches the browser on the same profile — asserting the count survives all
-five. Needs `playwright`.
+`durability.py` taps, then reloads, closes and reopens the tab, copies the file
+elsewhere, and relaunches the browser on the same profile — asserting the count
+survives all five.
+
+`archive.py` checks the Events archive against a really filled storage quota:
+no cap on stored events, End refuses rather than losing data when storage is
+full, an interrupted end never duplicates, and deletes persist.
+
+`update.py` pairs the new script with the page deployed before it and checks
+the pads still count, then proves the service worker never mixes versions in
+its cache and that a `CACHE` bump still installs the whole new shell.
+
+`durability.py` and `archive.py` drive `dist/head-count.html`; `update.py`
+serves copies of `docs/`. All three need `playwright`.

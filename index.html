@@ -45,8 +45,21 @@
 <footer class="bar">
   <button id="btnUndo" class="mini">Undo</button>
   <button id="btnData" class="mini">Data</button>
+  <button id="btnEvents" class="mini">Events</button>
   <button id="btnEnd" class="mini danger">End event</button>
 </footer>
+
+<!-- events archive (before the data sheet, so an event opened from here stacks on top) -->
+<section id="events" class="sheet" hidden>
+  <div class="sheethead">
+    <strong>Events</strong>
+    <button id="eventsClose" class="mini">Close</button>
+  </div>
+  <div class="sheetbody">
+    <p id="evsum" class="evsum"></p>
+    <div id="evlist"></div>
+  </div>
+</section>
 
 <!-- data sheet -->
 <section id="sheet" class="sheet" hidden>
@@ -76,8 +89,6 @@
         <th>#</th><th>Time</th><th>Elapsed</th><th>Dir</th><th>Inside</th>
       </tr></thead><tbody id="tbody"></tbody></table>
     </div>
-
-    <div id="archive" class="archive"></div>
   </div>
 </section>
 
@@ -85,7 +96,7 @@
 <dialog id="dlgEnd" class="dlg">
   <h2>End this event?</h2>
   <p id="dlgSummary" class="dlgsum"></p>
-  <p class="dlgnote">The log is saved and the counter resets to zero for a new event. This cannot be undone.</p>
+  <p class="dlgnote">The event moves to Events and the counter resets to zero. This cannot be undone.</p>
   <div class="dlgrow">
     <button id="dlgCancel" class="mini wide" autofocus>Keep counting</button>
     <button id="dlgConfirm" class="mini wide danger">End event</button>
