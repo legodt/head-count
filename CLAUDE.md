@@ -5,13 +5,27 @@ Offline counter for people in and out of a venue across one long event
 dependencies, no network calls, no framework.
 
 ## Two builds, one source
-- **Served** — `index.html` + `styles.css` + `app.js` + `sw.js` +
-  `manifest.webmanifest` + `icons/`. Installs to a home screen.
-  Bump `CACHE` in `sw.js` on **any** shell change or clients keep the old app.
-- **Single file** — `python build.py` → `dist/head-count.html`. Inlines the CSS,
-  JS and favicon; drops the manifest and worker (neither works on `file://`).
-  Opened straight from disk, no server. `build.py` refuses to ship if anything
-  failed to inline.
+Source of truth is the repo root: `index.html`, `styles.css`, `app.js`,
+`sw.js`, `manifest.webmanifest`, `icons/`. `python build.py` emits both
+shippable forms and nothing is edited inside them.
+
+- **`docs/`** — the deployable site. Installs to a home screen. Named `docs`
+  because a GitHub Pages branch deploy serves only the repo root or `/docs`,
+  and the root would expose `build.py` and this spec. Rebuilt from scratch each
+  run: stale files are pruned so a renamed source cannot reappear on a public
+  URL, and the build **refuses to ship** if `sw.js` names a file that is not
+  there. Carries `.nojekyll`.
+- **`dist/head-count.html`** — one self-contained file opened straight from
+  disk. Inlines the CSS, JS and favicon; drops the manifest and worker (neither
+  works on `file://`). `build.py` refuses to ship if anything failed to inline.
+
+Bump `CACHE` in `sw.js` on **any** shell change or installed clients keep the
+old app. Updates land on a client's **second** launch — the worker serves the
+cached copy first and revalidates behind it, so a dead network never blocks a
+tap.
+
+Manifest `start_url` and `scope` are relative (`./`), so a subpath deploy such
+as `user.github.io/head-count/` works — verified, not assumed.
 
 `app.js` skips service-worker registration when `location.protocol === 'file:'`,
 so the same source runs unmodified in both.
@@ -84,9 +98,9 @@ clean. Always the complete log; only the on-screen table is capped at 300.
 
 ## Run and test
 ```
-python build.py                                   # -> dist/head-count.html
-python -m http.server 8123 --directory head-count # served build
-python tests/durability.py                        # file:// survival, needs playwright
+python build.py                              # -> docs/ and dist/head-count.html
+python -m http.server 8123 --directory docs  # the deployable build
+python tests/durability.py                   # file:// survival, needs playwright
 ```
 `tests/durability.py` taps, then reloads, closes and reopens the tab, copies
 the file elsewhere, and relaunches the browser on the same profile — asserting
