@@ -155,9 +155,9 @@ function analyze(s) {
 function narrate(s, a) {
   if (!a.n) return '';
   const b = [];
-  if (a.surgeIn) b.push(`Arrivals ran hardest ${hm(a.surgeIn.from)}–${hm(a.surgeIn.to)}, about ${Math.round(a.surgeIn.rate)} an hour.`);
+  if (a.surgeIn) b.push(`Arrivals ran hardest ${spanOf(a.surgeIn.from, a.surgeIn.to)}, about ${Math.round(a.surgeIn.rate)} an hour.`);
   if (a.peak) b.push(`Fullest at ${hm(a.peakAt)} with ${a.peak} inside.`);
-  if (a.surgeOut && a.tout > 2) b.push(`Heaviest exits ${hm(a.surgeOut.from)}–${hm(a.surgeOut.to)}.`);
+  if (a.surgeOut && a.tout > 2) b.push(`Heaviest exits ${spanOf(a.surgeOut.from, a.surgeOut.to)}.`);
   if (a.tin && a.turnover >= 1.35) b.push(`${a.tin} guests passed through a room that held at most ${a.peak}, so the crowd turned over about ${a.turnover.toFixed(1)}×.`);
   if (!s.endedAt) {
     b.push(Math.abs(a.trend) < 2 ? 'Right now it is holding steady.'
@@ -168,7 +168,10 @@ function narrate(s, a) {
   return b.join(' ');
 }
 
-/* ---------------- formatting ---------------- */
+/* ---------------- formatting ----------------
+   Every clock time comes from local Date getters, so the phone's own clock and
+   time zone decide what is shown - never UTC, never a fixed zone. People read
+   12-hour times with AM/PM; durations stay H:MM:SS. */
 
 const p2 = n => String(n).padStart(2, '0');
 function hms(ms) {
@@ -181,8 +184,17 @@ function durShort(ms) {
   const h = Math.floor(m / 60), r = m % 60;
   return r ? h + 'h ' + r + 'm' : h + 'h';
 }
-const clockOf = t => { const d = new Date(t); return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()); };
-const hm = t => clockOf(t).slice(0, 5);
+function clock12(t, secs) {
+  const d = new Date(t), h = d.getHours();
+  return (h % 12 || 12) + ':' + p2(d.getMinutes()) + (secs ? ':' + p2(d.getSeconds()) : '') + (h < 12 ? ' AM' : ' PM');
+}
+const hm = t => clock12(t, false);        // 9:05 PM
+const clockOf = t => clock12(t, true);    // 9:05:12 PM
+// "9:40–10:40 PM", or "11:30 PM–12:30 AM" when the range crosses noon or midnight.
+function spanOf(a, b) {
+  const x = hm(a), y = hm(b);
+  return x.slice(-2) === y.slice(-2) ? x.slice(0, -3) + '–' + y : x + '–' + y;
+}
 const dateOf = t => { const d = new Date(t); return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()); };
 const stampOf = t => { const d = new Date(t); return '' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes()); };
 const localOf = t => dateOf(t) + ' ' + clockOf(t);
@@ -238,14 +250,20 @@ function render() {
   $('tout').textContent = f.tout;
   $('peak').textContent = f.peak;
   $('label').textContent = S.label || 'Tap to name event';
+  $('label').classList.toggle('unnamed', !S.label);
   $('btnUndo').disabled = !f.n;
   $('btnEnd').disabled = !f.n;
   paintClock();
 }
-function paintClock() { $('clock').textContent = hms(durOf(S)); }
+// The clock is the device's own time; the session's running length sits beside it.
+function paintClock() {
+  $('clock').textContent = hm(Date.now());
+  const el = $('elapsed');
+  if (el) { el.hidden = !S.startedAt; el.textContent = hms(durOf(S)) + ' elapsed'; }
+}
 
 function startTick() {
-  if (tick || document.hidden || !S.startedAt) return;
+  if (tick || document.hidden) return;
   tick = setInterval(paintClock, 1000);
 }
 function stopTick() { clearInterval(tick); tick = null; }
@@ -277,9 +295,9 @@ function refreshSheet(full) {
     [a.peak, 'peak inside', a.peak ? 'at ' + hm(a.peakAt) : ''],
     [hms(a.span), 'duration', s.startedAt ? 'from ' + hm(s.startedAt) : ''],
     [a.surgeIn ? '+' + rate(a.surgeIn.rate) + '/hr' : '—', 'peak arrivals',
-      a.surgeIn ? hm(a.surgeIn.from) + '–' + hm(a.surgeIn.to) : ''],
+      a.surgeIn ? spanOf(a.surgeIn.from, a.surgeIn.to) : ''],
     [a.surgeOut ? '−' + rate(a.surgeOut.rate) + '/hr' : '—', 'peak exits',
-      a.surgeOut ? hm(a.surgeOut.from) + '–' + hm(a.surgeOut.to) : ''],
+      a.surgeOut ? spanOf(a.surgeOut.from, a.surgeOut.to) : ''],
     [a.tin ? durShort(a.avgStay) : '—', 'avg stay', 'estimated'],
     [a.medianIn ? hm(a.medianIn) : '—', 'half in by',
       a.tin ? Math.ceil(a.tin / 2) + ' of ' + a.tin + ' arrivals' : ''],
@@ -341,12 +359,35 @@ function renderEvents() {
       const day = new Date(t0).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
       return '<article class="evcard">' +
         '<button class="evopen" data-view="' + i + '"><b>' + esc(titleOf(s)) + '</b>' +
-        '<span>' + day + ' · ' + hm(t0) + '–' + hm(s.endedAt) + ' · ' + durShort(a.span) + '</span>' +
+        '<span>' + day + ' · ' + spanOf(t0, s.endedAt) + ' · ' + durShort(a.span) + '</span>' +
         '<span class="evnums"><em>' + a.tin + '</em> guests · <em>' + a.peak + '</em> peak · <em>' +
         (a.tin ? durShort(a.avgStay) : '—') + '</em> avg stay</span></button>' +
         '<div class="evacts"><button class="mini" data-csv="' + i + '">' + (canShareFiles ? 'Share CSV' : 'Download CSV') + '</button>' +
         '<button class="mini danger" data-del="' + i + '">Delete</button></div></article>';
     }).join('');
+}
+
+// Names the live session or, from the data sheet, any ended one. An ended
+// event is renamed by writing the whole archive, read back and adopted only on
+// success - the same as End and Delete. Matched by id, because a foreground
+// reload swaps ARCH for fresh objects the sheet may not be holding.
+function renameEvent(s) {
+  const v = prompt(s.label ? 'Rename this event' : 'Name this event', s.label || '');
+  if (v === null) return;
+  const label = v.trim().slice(0, 60);
+  if (label === s.label) return;
+  if (!s.endedAt) {
+    S.label = label; save(true);
+  } else {
+    const i = ARCH.findIndex(a => a.id === s.id);
+    if (i < 0) return toast('That event is no longer on this device');
+    const next = ARCH.slice();
+    next[i] = Object.assign({}, ARCH[i], { label });
+    if (!saveArch(next)) return warnBanner('Could not rename that event - storage is full or blocked.');
+    ARCH = next;
+    if (viewing) viewing = next[i];
+  }
+  render(); refreshSheet(true); renderEvents();
 }
 
 function deleteEvent(i) {
@@ -382,15 +423,24 @@ function frame(id, s) {
   return { ctx, W, H, L, T, pw: W - L - R, ph: H - T - B, t0, t1, X: t => L + (t - t0) / (t1 - t0) * (W - L - R) };
 }
 
+// The most evenly spaced times, 2 to 5, that neither touch nor repeat (a short
+// session would otherwise read 11:58, 11:58, 11:59). Widths are measured:
+// "12:45 AM" is far wider than "00:45" was. The end labels align inward so
+// neither clips. Time runs on epoch ms, so midnight is just a point on a line.
 function xAxis(g) {
-  const { ctx, L, T, pw, ph, t0, t1, X } = g;
-  const n = Math.max(2, Math.min(5, Math.floor(pw / 70)));
-  ctx.fillStyle = '#8ba0b4'; ctx.textBaseline = 'top';
-  for (let i = 0; i < n; i++) {
-    const t = t0 + (t1 - t0) * i / (n - 1);
-    ctx.textAlign = i === 0 ? 'left' : i === n - 1 ? 'right' : 'center';
-    ctx.fillText(hm(t), X(t), T + ph + 6);
+  const { ctx, T, ph, t0, t1, X } = g;
+  let marks;
+  for (let n = 5; n >= 2; n--) {
+    marks = [];
+    for (let i = 0; i < n; i++) {
+      const t = t0 + (t1 - t0) * i / (n - 1), text = hm(t), w = ctx.measureText(text).width, x = X(t);
+      const left = i === 0 ? x : i === n - 1 ? x - w : x - w / 2;
+      marks.push({ text, left, right: left + w });
+    }
+    if (marks.every((m, i) => !i || (m.left - marks[i - 1].right >= 12 && m.text !== marks[i - 1].text))) break;
   }
+  ctx.fillStyle = '#8ba0b4'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+  for (const m of marks) ctx.fillText(m.text, m.left, T + ph + 6);
 }
 
 function drawChart(s, a) {
@@ -557,12 +607,8 @@ on('btnUndo', 'click', undo);
 on('btnData', 'click', () => { viewing = null; openSheet(); });
 on('sheetClose', 'click', closeSheet);
 
-on('label', 'click', () => {
-  const v = prompt('Name this event', S.label || '');
-  if (v === null) return;
-  S.label = v.trim().slice(0, 60);
-  save(true); render(); refreshSheet(true);
-});
+on('label', 'click', () => renameEvent(S));
+on('sheetRename', 'click', () => renameEvent(cur()));
 
 on('btnEnd', 'click', () => {
   const f = fold(S);

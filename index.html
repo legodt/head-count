@@ -20,7 +20,7 @@
 <div id="warn" class="warn" hidden></div>
 
 <header class="hud">
-  <button id="label" class="label" title="Name this event">Tap to name event</button>
+  <button id="label" class="label unnamed" title="Name this event">Tap to name event</button>
   <div class="occwrap">
     <div id="occ" class="occ">0</div>
     <div class="occlbl">inside</div>
@@ -29,7 +29,10 @@
     <span><b id="tin">0</b> in</span>
     <span><b id="tout">0</b> out</span>
     <span><b id="peak">0</b> peak</span>
-    <span id="clock" class="clock">--:--:--</span>
+  </div>
+  <div class="meta time">
+    <b id="clock" class="clock" title="Time on this device">--:--</b>
+    <span id="elapsed" class="clock" hidden></span>
   </div>
 </header>
 
@@ -65,6 +68,7 @@
 <section id="sheet" class="sheet" hidden>
   <div class="sheethead">
     <strong id="sheetTitle">Session data</strong>
+    <button id="sheetRename" class="mini">Rename</button>
     <button id="sheetClose" class="mini">Close</button>
   </div>
   <div class="sheetbody">

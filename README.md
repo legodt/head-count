@@ -70,6 +70,7 @@ python build.py
 python tests/durability.py
 python tests/archive.py
 python tests/update.py
+python tests/overnight.py
 ```
 
 `durability.py` taps, then reloads, closes and reopens the tab, copies the file
@@ -78,11 +79,16 @@ survives all five.
 
 `archive.py` checks the Events archive against a really filled storage quota:
 no cap on stored events, End refuses rather than losing data when storage is
-full, an interrupted end never duplicates, and deletes persist.
+full, an interrupted end never duplicates, deletes persist, and renames land
+on the right event or change nothing.
 
-`update.py` pairs the new script with the page deployed before it and checks
+`update.py` pairs the new script with each page deployed before it and checks
 the pads still count, then proves the service worker never mixes versions in
 its cache and that a `CACHE` bump still installs the whole new shell.
 
-`durability.py` and `archive.py` drive `dist/head-count.html`; `update.py`
-serves copies of `docs/`. All three need `playwright`.
+`overnight.py` checks times against the zone database: the clock follows the
+device's zone, and an event across midnight or a daylight-saving change charts,
+summarises and exports correctly.
+
+`durability.py`, `archive.py` and `overnight.py` drive `dist/head-count.html`;
+`update.py` serves copies of `docs/`. All four need `playwright`.

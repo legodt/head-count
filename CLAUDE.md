@@ -35,8 +35,9 @@ versions.
 - `app.js` loads state before any wiring and wires every element through
   `on()`, which skips absent ids, so the pads keep counting even if the script
   meets an older page. **Never wire with `$(id).addEventListener` directly.**
-  `tests/update.py` proves it against `tests/fixtures/index-v6.html`, the page
-  deployed before Events.
+  `tests/update.py` proves it against every page deployed before
+  (`tests/fixtures/index-v*.html`). **Before changing `index.html`, save the
+  live one there as the next fixture.**
 
 Manifest `start_url` and `scope` are relative (`./`), so a subpath deploy such
 as `user.github.io/head-count/` works — verified, not assumed.
@@ -66,6 +67,14 @@ so the same source runs unmodified in both.
 ## Behaviour
 - IN / OUT pads fire on `pointerdown`, not click: the tap counts the instant
   the finger lands. Each tap flashes the pad and vibrates.
+- HUD: count; in / out / peak; the **device's current time** and, once the
+  first tap starts the session, its elapsed length.
+- **Naming.** Until named, the title at the top is a dashed pill with a pencil
+  — a call to action; once named, plain text with a faint pencil. Tap to name.
+  The data sheet head has **Rename** for whichever event it shows, live or
+  ended. An ended event is renamed by writing the whole archive, read back and
+  adopted only on success, matched by `id` — a foreground `reload()` swaps
+  `ARCH` for fresh objects. Storage full → name unchanged, banner.
 - `Undo` removes the last tap only, and forces a backup write so the backup
   cannot outlive the removed tap.
 - `End event` → confirmation dialog with a summary → the event is written to
@@ -87,6 +96,18 @@ so the same source runs unmodified in both.
   night, occupancy chart, arrivals/exits flow chart, CSV export, last 300 taps
   newest-first.
 
+## Time
+Every clock time comes from local `Date` getters on epoch ms, so the device's
+own clock and zone decide it — never UTC, never a fixed zone. People read
+12-hour with AM/PM: `hm` → `9:05 PM`, `clockOf` → `9:05:12 PM` (tap table).
+`spanOf` collapses a shared meridiem: `9:40–10:40 PM`, but `11:30 PM–12:30 AM`.
+Durations stay `HH:MM:SS` or `2h 18m`. CSV filenames keep a 24-hour
+`YYYYMMDD-HHMM` stamp so they sort.
+
+Midnight is nothing special: every position is linear in epoch ms. A
+daylight-saving night plots and measures real elapsed time; only its labels
+jump, so a fall-back hour can read `1:30–1:30 AM`.
+
 ## Analysis (`analyze()` / `narrate()`)
 Derived from the tap log alone — it never identifies anyone, only counts and
 times. Tiles: **peak inside** (+ when), **duration** (+ start), **peak
@@ -103,17 +124,20 @@ the CSV.
 
 ## Charts
 - Occupancy: step line (occupancy holds flat between taps), filled, peak
-  marked, x axis clock time, y axis nearest-nice steps.
+  marked, y axis nearest-nice steps.
 - Flow: arrivals up / exits down per bucket, bucket auto-picked from
   `BUCKETS` so ~48 bars span the event. Axis numbers are colour-coded rather
   than labelled "in"/"out" — words overrun the 28px gutter.
-- Both share `frame()` / `xAxis()` and the same time range. Redraw every 2 s
-  while the sheet is open and the session is live.
+- Both share `frame()` / `xAxis()` and the same time range. The x axis shows
+  2–5 evenly spaced clock times — the most that neither touch nor repeat,
+  measured, since `12:45 AM` is wide — end labels aligned inward. Redraw every
+  2 s while the sheet is open and the session is live.
 
 ## CSV
 `seq, iso_timestamp, local_time, epoch_ms, elapsed_s, elapsed_hms, direction,
 delta, occupancy, cumulative_in, cumulative_out`. UTF-8 BOM so Excel opens it
-clean. Always the complete log; only the on-screen table is capped at 300.
+clean. `local_time` is device time, `2026-09-12 9:05:03 PM`; `iso_timestamp` is
+UTC. Always the complete log; only the on-screen table is capped at 300.
 
 ## Constraints
 - Must work with no network for the entire session.
@@ -131,9 +155,10 @@ python -m http.server 8123 --directory docs  # the deployable build
 python tests/durability.py                   # file:// survival, needs playwright
 python tests/archive.py                      # events archive integrity, needs playwright
 python tests/update.py                       # deploy/update safety, needs playwright
+python tests/overnight.py                    # time zones, midnight, DST, needs playwright
 ```
-`durability.py` and `archive.py` drive `dist/head-count.html`; `update.py` serves
-temporary copies of `docs/`. Run `python build.py` first.
+`durability.py`, `archive.py` and `overnight.py` drive `dist/head-count.html`;
+`update.py` serves temporary copies of `docs/`. Run `python build.py` first.
 `tests/durability.py` taps, then reloads, closes and reopens the tab, copies
 the file elsewhere, and relaunches the browser on the same profile — asserting
 the count survives all five.
@@ -141,10 +166,18 @@ the count survives all five.
 `tests/archive.py` exercises the archive against a **really filled** quota, not
 a mock: 35 events survive with no cap and unique ids, End refuses when storage
 is full and leaves the event live, an interrupted end resolves without
-duplicating, and deletes persist across a reload.
+duplicating, deletes persist across a reload, and renames — live or ended,
+after a foreground reload, cancelled, or with storage full — land on the right
+event or change nothing.
 
 `tests/update.py` serves copies of `docs/` with HTTP caching off, so anything
-that changes is the worker's doing. It pairs the new script with the previous
+that changes is the worker's doing. It pairs the new script with each previous
 page and checks the pads still count and persist; checks a file changed on the
 server never leaks into the live cache; and checks a `CACHE` bump still
 installs the complete new shell and purges the old.
+
+`tests/overnight.py` works every expected time out in Python from the zone
+database and reads the charts through a canvas spy: the HUD clock in four
+zones; a 9 PM–3 AM event and both daylight-saving directions (axis, line, peak
+marker and flow buckets across midnight; tiles, narrative, card, table, CSV);
+and a live session with the device clock run through 12:00 AM.

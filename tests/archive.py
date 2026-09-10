@@ -8,6 +8,9 @@
 3. Interrupted end: a session left in both the live slot and the archive
    resolves to the archive copy with the counter reset, never duplicated.
 4. Delete persists across a reload.
+5. Rename: the live event from the main screen, and an ended one from its data
+   sheet - persisted, other events untouched, still right after a foreground
+   reload, a no-op when cancelled, and refused cleanly when storage is full.
 
 Needs playwright. Exits non-zero on any failure.
 """
@@ -39,6 +42,19 @@ FILL = """() => {
 }"""
 
 failures = []
+# Prompt answers: None dismisses. The prompt's pre-filled value is recorded.
+ANSWER = {"text": None, "seen": None}
+
+
+def on_dialog(d):
+    if d.type != "prompt":
+        return d.accept()                          # confirm() on delete
+    ANSWER["seen"] = d.default_value
+    return d.dismiss() if ANSWER["text"] is None else d.accept(ANSWER["text"])
+
+
+def labels(pg):
+    return pg.evaluate("JSON.parse(localStorage.getItem('hc.arch.v1')).map(a => [a.label, a.ev.length])")
 
 
 def check(name, ok, detail=""):
@@ -56,7 +72,7 @@ shutil.rmtree(PROFILE, ignore_errors=True)
 with sync_playwright() as pw:
     ctx = pw.chromium.launch_persistent_context(str(PROFILE), headless=True)
     pg = ctx.new_page()
-    pg.on("dialog", lambda d: d.accept())          # confirm() on delete
+    pg.on("dialog", on_dialog)
     pg.goto(URL)
 
     # 1 -- no cap ---------------------------------------------------------
@@ -112,6 +128,61 @@ with sync_playwright() as pw:
     pg.reload()
     st = pg.evaluate("({ n: ARCH.length, taps: ARCH[0].ev.length })")
     check("delete persists across reload", st == {"n": 1, "taps": 40}, st)
+
+    # 5 -- rename ---------------------------------------------------------
+    fresh(pg)
+    pg.evaluate(TAP, 30); pg.evaluate("S.label = 'Friday'; save(true); endEvent()")
+    pg.evaluate(TAP, 20); pg.evaluate("S.label = 'Saturday'; save(true); endEvent(); closeSheet()")
+    pg.evaluate(TAP, 5)
+    unnamed = "document.getElementById('label').classList.contains('unnamed')"
+    check("unnamed live event: name button styled as a call to action", pg.evaluate(unnamed))
+
+    ANSWER["text"] = "  Sunday Session  "
+    pg.click("#label")
+    pg.reload()
+    st = pg.evaluate("({ label: S.label, shown: document.getElementById('label').textContent,"
+                     " unnamed: " + unnamed + " })")
+    check("live rename from main screen: trimmed, persisted, call to action gone",
+          st == {"label": "Sunday Session", "shown": "Sunday Session", "unnamed": False}, st)
+
+    pg.click("#btnEvents")
+    pg.locator(".evopen").nth(1).click()                     # Friday, the older one
+    ANSWER["text"] = "Friday Late"
+    pg.click("#sheetRename")
+    check("rename prompt starts from the current name", ANSWER["seen"] == "Friday", ANSWER["seen"])
+    title = pg.evaluate("document.getElementById('sheetTitle').textContent")
+    check("ended event renamed from data sheet: title updates", title == "Friday Late (ended)", title)
+    st = labels(pg)
+    check("ended event renamed: stored, taps and other events untouched",
+          st == [["Saturday", 20], ["Friday Late", 30]]
+          and pg.evaluate("JSON.parse(localStorage.getItem('hc.active.v1')).label") == "Sunday Session", st)
+    pg.click("#sheetClose")
+    cards = pg.evaluate("[...document.querySelectorAll('.evopen b')].map(b => b.textContent)")
+    check("ended event renamed: Events list shows the new name", cards == ["Saturday", "Friday Late"], cards)
+
+    pg.locator(".evopen").first.click()                      # Saturday
+    pg.evaluate("reload()")                                  # foreground re-read: ARCH is now fresh objects
+    ANSWER["text"] = "Saturday Warehouse"
+    pg.click("#sheetRename")
+    pg.reload()
+    check("rename after a foreground reload lands on the right event, survives reload",
+          labels(pg) == [["Saturday Warehouse", 20], ["Friday Late", 30]], labels(pg))
+
+    pg.click("#btnEvents")
+    pg.locator(".evopen").first.click()
+    ANSWER["text"] = None
+    pg.click("#sheetRename")
+    check("cancelled rename changes nothing", labels(pg) == [["Saturday Warehouse", 20], ["Friday Late", 30]])
+
+    pg.evaluate(FILL)
+    ANSWER["text"] = "A much longer name that cannot fit in a full store"
+    pg.click("#sheetRename")
+    st = pg.evaluate("() => ({ mem: ARCH[0].label, title: document.getElementById('sheetTitle').textContent,"
+                     " banner: !document.getElementById('warn').hidden })")
+    check("storage full: rename refused - stored, in memory and on screen unchanged, banner shown",
+          labels(pg) == [["Saturday Warehouse", 20], ["Friday Late", 30]]
+          and st == {"mem": "Saturday Warehouse", "title": "Saturday Warehouse (ended)", "banner": True}, st)
+    pg.evaluate("localStorage.removeItem('filler')")
 
     ctx.close()
 

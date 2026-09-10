@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Head Count</title>
+<meta name="description" content="Offline door counter: tap in, tap out, keep a timestamped log and occupancy chart for the whole night.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0b0f14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Head Count">
+<link rel="apple-touch-icon" href="icons/apple-touch-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="warn" class="warn" hidden></div>
+
+<header class="hud">
+  <button id="label" class="label" title="Name this event">Tap to name event</button>
+  <div class="occwrap">
+    <div id="occ" class="occ">0</div>
+    <div class="occlbl">inside</div>
+  </div>
+  <div class="meta">
+    <span><b id="tin">0</b> in</span>
+    <span><b id="tout">0</b> out</span>
+    <span><b id="peak">0</b> peak</span>
+    <span id="clock" class="clock">--:--:--</span>
+  </div>
+</header>
+
+<main class="pads">
+  <button id="padIn" class="pad in" aria-label="Person entering">
+    <span class="glyph">+1</span><span class="cap">IN</span>
+  </button>
+  <button id="padOut" class="pad out" aria-label="Person leaving">
+    <span class="glyph">&minus;1</span><span class="cap">OUT</span>
+  </button>
+</main>
+
+<footer class="bar">
+  <button id="btnUndo" class="mini">Undo</button>
+  <button id="btnData" class="mini">Data</button>
+  <button id="btnEvents" class="mini">Events</button>
+  <button id="btnEnd" class="mini danger">End event</button>
+</footer>
+
+<!-- events archive (before the data sheet, so an event opened from here stacks on top) -->
+<section id="events" class="sheet" hidden>
+  <div class="sheethead">
+    <strong>Events</strong>
+    <button id="eventsClose" class="mini">Close</button>
+  </div>
+  <div class="sheetbody">
+    <p id="evsum" class="evsum"></p>
+    <div id="evlist"></div>
+  </div>
+</section>
+
+<!-- data sheet -->
+<section id="sheet" class="sheet" hidden>
+  <div class="sheethead">
+    <strong id="sheetTitle">Session data</strong>
+    <button id="sheetClose" class="mini">Close</button>
+  </div>
+  <div class="sheetbody">
+    <div class="stats" id="stats"></div>
+    <p id="insight" class="insight"></p>
+
+    <canvas id="chart" class="chart"></canvas>
+    <div class="chartcap">Occupancy over session time</div>
+
+    <canvas id="flow" class="chart flow"></canvas>
+    <div class="chartcap" id="flowcap"></div>
+
+    <div class="exports">
+      <button id="btnCsv" class="mini wide">Download CSV</button>
+      <button id="btnShare" class="mini wide" hidden>Share CSV</button>
+      <button id="btnCopy" class="mini wide">Copy CSV</button>
+    </div>
+
+    <div class="tablewrap">
+      <div class="tcap" id="tcap"></div>
+      <table class="log"><thead><tr>
+        <th>#</th><th>Time</th><th>Elapsed</th><th>Dir</th><th>Inside</th>
+      </tr></thead><tbody id="tbody"></tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- end-event confirmation -->
+<dialog id="dlgEnd" class="dlg">
+  <h2>End this event?</h2>
+  <p id="dlgSummary" class="dlgsum"></p>
+  <p class="dlgnote">The event moves to Events and the counter resets to zero. This cannot be undone.</p>
+  <div class="dlgrow">
+    <button id="dlgCancel" class="mini wide" autofocus>Keep counting</button>
+    <button id="dlgConfirm" class="mini wide danger">End event</button>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

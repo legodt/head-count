@@ -2,8 +2,8 @@
 
     python build.py && python tests/update.py
 
-1. Mismatched deploy: the new app.js paired with the page deployed before it
-   (tests/fixtures/index-v6.html) still boots, counts, and keeps the count
+1. Mismatched deploy: the new app.js paired with each page deployed before it
+   (tests/fixtures/index-v*.html) still boots, counts, and keeps the count
    across a reload.
 2. The service worker never writes to its cache after install, so a file
    changed on the server is not picked up piecemeal and every page load is
@@ -29,7 +29,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
-OLD_PAGE = ROOT / "tests" / "fixtures" / "index-v6.html"
+OLD_PAGES = sorted((ROOT / "tests" / "fixtures").glob("index-v*.html"))
 CACHE = re.search(r"const CACHE = '([^']+)'", (DOCS / "sw.js").read_text(encoding="utf-8")).group(1)
 MARK = "\n// changed on the server\n"
 
@@ -86,23 +86,24 @@ def poll(pg, js, want, tries=60):
 with sync_playwright() as pw:
     browser = pw.chromium.launch()
 
-    # 1 -- new script on the previous page -----------------------------------
-    with served_copy(lambda tmp: shutil.copy(OLD_PAGE, tmp / "index.html")) as (tmp, url):
-        ctx = browser.new_context(service_workers="block")
-        pg = ctx.new_page()
-        errors = []
-        pg.on("pageerror", lambda e: errors.append(str(e)))
-        pg.goto(url)
-        for sel in ("#padIn", "#padIn", "#padIn", "#padOut"):
-            pg.click(sel)
-        live = pg.evaluate(STATE)
-        pg.reload()
-        again = pg.evaluate(STATE)
-        check("previous page + new script: pads count", live == {"n": 4, "shown": "2"}, live)
-        check("previous page + new script: count survives reload and renders",
-              again == {"n": 4, "shown": "2"}, again)
-        check("previous page + new script: no uncaught errors", not errors, "; ".join(errors)[:160])
-        ctx.close()
+    # 1 -- new script on each previous page ----------------------------------
+    for old in OLD_PAGES:
+        with served_copy(lambda tmp: shutil.copy(old, tmp / "index.html")) as (tmp, url):
+            ctx = browser.new_context(service_workers="block")
+            pg = ctx.new_page()
+            errors = []
+            pg.on("pageerror", lambda e: errors.append(str(e)))
+            pg.goto(url)
+            for sel in ("#padIn", "#padIn", "#padIn", "#padOut"):
+                pg.click(sel)
+            live = pg.evaluate(STATE)
+            pg.reload()
+            again = pg.evaluate(STATE)
+            check(f"{old.stem} page + new script: pads count", live == {"n": 4, "shown": "2"}, live)
+            check(f"{old.stem} page + new script: count survives reload and renders",
+                  again == {"n": 4, "shown": "2"}, again)
+            check(f"{old.stem} page + new script: no uncaught errors", not errors, "; ".join(errors)[:160])
+            ctx.close()
 
     # 2 + 3 -- worker cache consistency --------------------------------------
     with served_copy() as (tmp, url):

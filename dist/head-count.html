@@ -16,6 +16,7 @@
   --bg:#0b0f14; --panel:#131a22; --line:#22303d; --ink:#e8eef5; --dim:#8ba0b4;
   --in:#12a05f; --in2:#0d7a48; --out:#c2413a; --out2:#95302b; --warn:#e0a800;
   --pad-top:env(safe-area-inset-top); --pad-bot:env(safe-area-inset-bottom);
+  --pen:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 17.25V21h3.75L17.8 9.94l-3.75-3.75zM20.7 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75z'/%3E%3C/svg%3E");
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none}
@@ -29,16 +30,26 @@ body{
 /* ---------- hud ---------- */
 .hud{padding:calc(var(--pad-top) + 8px) 12px 8px;text-align:center;flex:0 0 auto}
 .label{
-  background:none;border:0;color:var(--dim);font:inherit;font-size:13px;
-  letter-spacing:.04em;padding:2px 8px;max-width:100%;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap
+  display:inline-block;background:none;border:1px solid transparent;border-radius:999px;
+  color:var(--ink);font:inherit;font-size:14px;font-weight:600;letter-spacing:.02em;
+  padding:4px 12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
 }
+.label::before{
+  content:"";display:inline-block;width:13px;height:13px;margin-right:7px;vertical-align:-1px;
+  background:currentColor;opacity:.45;
+  -webkit-mask:var(--pen) center/contain no-repeat;mask:var(--pen) center/contain no-repeat
+}
+/* Unnamed: a clear call to action until the event has a name. */
+.label.unnamed{color:#d6e9fb;background:#15222f;border:1px dashed #5a83a6;padding:8px 16px;margin-bottom:2px}
+.label.unnamed::before{opacity:1}
+.label:active{filter:brightness(1.3)}
 .occwrap{display:flex;align-items:baseline;justify-content:center;gap:8px}
 .occ{font-size:clamp(44px,15vw,72px);font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
 .occ.neg{color:var(--warn)}
 .occlbl{color:var(--dim);font-size:14px;letter-spacing:.12em;text-transform:uppercase}
 .meta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;color:var(--dim);font-size:13px;margin-top:4px}
 .meta b{color:var(--ink);font-variant-numeric:tabular-nums}
+.meta.time{margin-top:2px}
 .clock{font-variant-numeric:tabular-nums}
 
 /* ---------- pads ---------- */
@@ -86,6 +97,7 @@ body{
   display:flex;align-items:center;justify-content:space-between;gap:10px;
   padding:10px 12px;border-bottom:1px solid var(--line);flex:0 0 auto
 }
+.sheethead strong{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sheetbody{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px;
   user-select:text;-webkit-user-select:text}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px;margin-bottom:12px}
@@ -106,8 +118,8 @@ body{
 .tcap{color:var(--dim);font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line)}
 .log{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
 .log th{color:var(--dim);font-weight:600;text-align:left;font-size:11px;
-  text-transform:uppercase;letter-spacing:.05em;padding:6px 10px;border-bottom:1px solid var(--line)}
-.log td{padding:6px 10px;border-bottom:1px solid rgba(34,48,61,.6)}
+  text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:1px solid var(--line)}
+.log td{padding:6px 8px;border-bottom:1px solid rgba(34,48,61,.6);white-space:nowrap}
 .log tr:last-child td{border-bottom:0}
 .log .din{color:#4ad991}.log .dout{color:#ff8b83}
 
@@ -168,7 +180,7 @@ body{
 <div id="warn" class="warn" hidden></div>
 
 <header class="hud">
-  <button id="label" class="label" title="Name this event">Tap to name event</button>
+  <button id="label" class="label unnamed" title="Name this event">Tap to name event</button>
   <div class="occwrap">
     <div id="occ" class="occ">0</div>
     <div class="occlbl">inside</div>
@@ -177,7 +189,10 @@ body{
     <span><b id="tin">0</b> in</span>
     <span><b id="tout">0</b> out</span>
     <span><b id="peak">0</b> peak</span>
-    <span id="clock" class="clock">--:--:--</span>
+  </div>
+  <div class="meta time">
+    <b id="clock" class="clock" title="Time on this device">--:--</b>
+    <span id="elapsed" class="clock" hidden></span>
   </div>
 </header>
 
@@ -213,6 +228,7 @@ body{
 <section id="sheet" class="sheet" hidden>
   <div class="sheethead">
     <strong id="sheetTitle">Session data</strong>
+    <button id="sheetRename" class="mini">Rename</button>
     <button id="sheetClose" class="mini">Close</button>
   </div>
   <div class="sheetbody">
@@ -411,9 +427,9 @@ function analyze(s) {
 function narrate(s, a) {
   if (!a.n) return '';
   const b = [];
-  if (a.surgeIn) b.push(`Arrivals ran hardest ${hm(a.surgeIn.from)}–${hm(a.surgeIn.to)}, about ${Math.round(a.surgeIn.rate)} an hour.`);
+  if (a.surgeIn) b.push(`Arrivals ran hardest ${spanOf(a.surgeIn.from, a.surgeIn.to)}, about ${Math.round(a.surgeIn.rate)} an hour.`);
   if (a.peak) b.push(`Fullest at ${hm(a.peakAt)} with ${a.peak} inside.`);
-  if (a.surgeOut && a.tout > 2) b.push(`Heaviest exits ${hm(a.surgeOut.from)}–${hm(a.surgeOut.to)}.`);
+  if (a.surgeOut && a.tout > 2) b.push(`Heaviest exits ${spanOf(a.surgeOut.from, a.surgeOut.to)}.`);
   if (a.tin && a.turnover >= 1.35) b.push(`${a.tin} guests passed through a room that held at most ${a.peak}, so the crowd turned over about ${a.turnover.toFixed(1)}×.`);
   if (!s.endedAt) {
     b.push(Math.abs(a.trend) < 2 ? 'Right now it is holding steady.'
@@ -424,7 +440,10 @@ function narrate(s, a) {
   return b.join(' ');
 }
 
-/* ---------------- formatting ---------------- */
+/* ---------------- formatting ----------------
+   Every clock time comes from local Date getters, so the phone's own clock and
+   time zone decide what is shown - never UTC, never a fixed zone. People read
+   12-hour times with AM/PM; durations stay H:MM:SS. */
 
 const p2 = n => String(n).padStart(2, '0');
 function hms(ms) {
@@ -437,8 +456,17 @@ function durShort(ms) {
   const h = Math.floor(m / 60), r = m % 60;
   return r ? h + 'h ' + r + 'm' : h + 'h';
 }
-const clockOf = t => { const d = new Date(t); return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()); };
-const hm = t => clockOf(t).slice(0, 5);
+function clock12(t, secs) {
+  const d = new Date(t), h = d.getHours();
+  return (h % 12 || 12) + ':' + p2(d.getMinutes()) + (secs ? ':' + p2(d.getSeconds()) : '') + (h < 12 ? ' AM' : ' PM');
+}
+const hm = t => clock12(t, false);        // 9:05 PM
+const clockOf = t => clock12(t, true);    // 9:05:12 PM
+// "9:40–10:40 PM", or "11:30 PM–12:30 AM" when the range crosses noon or midnight.
+function spanOf(a, b) {
+  const x = hm(a), y = hm(b);
+  return x.slice(-2) === y.slice(-2) ? x.slice(0, -3) + '–' + y : x + '–' + y;
+}
 const dateOf = t => { const d = new Date(t); return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()); };
 const stampOf = t => { const d = new Date(t); return '' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes()); };
 const localOf = t => dateOf(t) + ' ' + clockOf(t);
@@ -494,14 +522,20 @@ function render() {
   $('tout').textContent = f.tout;
   $('peak').textContent = f.peak;
   $('label').textContent = S.label || 'Tap to name event';
+  $('label').classList.toggle('unnamed', !S.label);
   $('btnUndo').disabled = !f.n;
   $('btnEnd').disabled = !f.n;
   paintClock();
 }
-function paintClock() { $('clock').textContent = hms(durOf(S)); }
+// The clock is the device's own time; the session's running length sits beside it.
+function paintClock() {
+  $('clock').textContent = hm(Date.now());
+  const el = $('elapsed');
+  if (el) { el.hidden = !S.startedAt; el.textContent = hms(durOf(S)) + ' elapsed'; }
+}
 
 function startTick() {
-  if (tick || document.hidden || !S.startedAt) return;
+  if (tick || document.hidden) return;
   tick = setInterval(paintClock, 1000);
 }
 function stopTick() { clearInterval(tick); tick = null; }
@@ -533,9 +567,9 @@ function refreshSheet(full) {
     [a.peak, 'peak inside', a.peak ? 'at ' + hm(a.peakAt) : ''],
     [hms(a.span), 'duration', s.startedAt ? 'from ' + hm(s.startedAt) : ''],
     [a.surgeIn ? '+' + rate(a.surgeIn.rate) + '/hr' : '—', 'peak arrivals',
-      a.surgeIn ? hm(a.surgeIn.from) + '–' + hm(a.surgeIn.to) : ''],
+      a.surgeIn ? spanOf(a.surgeIn.from, a.surgeIn.to) : ''],
     [a.surgeOut ? '−' + rate(a.surgeOut.rate) + '/hr' : '—', 'peak exits',
-      a.surgeOut ? hm(a.surgeOut.from) + '–' + hm(a.surgeOut.to) : ''],
+      a.surgeOut ? spanOf(a.surgeOut.from, a.surgeOut.to) : ''],
     [a.tin ? durShort(a.avgStay) : '—', 'avg stay', 'estimated'],
     [a.medianIn ? hm(a.medianIn) : '—', 'half in by',
       a.tin ? Math.ceil(a.tin / 2) + ' of ' + a.tin + ' arrivals' : ''],
@@ -597,12 +631,35 @@ function renderEvents() {
       const day = new Date(t0).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
       return '<article class="evcard">' +
         '<button class="evopen" data-view="' + i + '"><b>' + esc(titleOf(s)) + '</b>' +
-        '<span>' + day + ' · ' + hm(t0) + '–' + hm(s.endedAt) + ' · ' + durShort(a.span) + '</span>' +
+        '<span>' + day + ' · ' + spanOf(t0, s.endedAt) + ' · ' + durShort(a.span) + '</span>' +
         '<span class="evnums"><em>' + a.tin + '</em> guests · <em>' + a.peak + '</em> peak · <em>' +
         (a.tin ? durShort(a.avgStay) : '—') + '</em> avg stay</span></button>' +
         '<div class="evacts"><button class="mini" data-csv="' + i + '">' + (canShareFiles ? 'Share CSV' : 'Download CSV') + '</button>' +
         '<button class="mini danger" data-del="' + i + '">Delete</button></div></article>';
     }).join('');
+}
+
+// Names the live session or, from the data sheet, any ended one. An ended
+// event is renamed by writing the whole archive, read back and adopted only on
+// success - the same as End and Delete. Matched by id, because a foreground
+// reload swaps ARCH for fresh objects the sheet may not be holding.
+function renameEvent(s) {
+  const v = prompt(s.label ? 'Rename this event' : 'Name this event', s.label || '');
+  if (v === null) return;
+  const label = v.trim().slice(0, 60);
+  if (label === s.label) return;
+  if (!s.endedAt) {
+    S.label = label; save(true);
+  } else {
+    const i = ARCH.findIndex(a => a.id === s.id);
+    if (i < 0) return toast('That event is no longer on this device');
+    const next = ARCH.slice();
+    next[i] = Object.assign({}, ARCH[i], { label });
+    if (!saveArch(next)) return warnBanner('Could not rename that event - storage is full or blocked.');
+    ARCH = next;
+    if (viewing) viewing = next[i];
+  }
+  render(); refreshSheet(true); renderEvents();
 }
 
 function deleteEvent(i) {
@@ -638,15 +695,24 @@ function frame(id, s) {
   return { ctx, W, H, L, T, pw: W - L - R, ph: H - T - B, t0, t1, X: t => L + (t - t0) / (t1 - t0) * (W - L - R) };
 }
 
+// The most evenly spaced times, 2 to 5, that neither touch nor repeat (a short
+// session would otherwise read 11:58, 11:58, 11:59). Widths are measured:
+// "12:45 AM" is far wider than "00:45" was. The end labels align inward so
+// neither clips. Time runs on epoch ms, so midnight is just a point on a line.
 function xAxis(g) {
-  const { ctx, L, T, pw, ph, t0, t1, X } = g;
-  const n = Math.max(2, Math.min(5, Math.floor(pw / 70)));
-  ctx.fillStyle = '#8ba0b4'; ctx.textBaseline = 'top';
-  for (let i = 0; i < n; i++) {
-    const t = t0 + (t1 - t0) * i / (n - 1);
-    ctx.textAlign = i === 0 ? 'left' : i === n - 1 ? 'right' : 'center';
-    ctx.fillText(hm(t), X(t), T + ph + 6);
+  const { ctx, T, ph, t0, t1, X } = g;
+  let marks;
+  for (let n = 5; n >= 2; n--) {
+    marks = [];
+    for (let i = 0; i < n; i++) {
+      const t = t0 + (t1 - t0) * i / (n - 1), text = hm(t), w = ctx.measureText(text).width, x = X(t);
+      const left = i === 0 ? x : i === n - 1 ? x - w : x - w / 2;
+      marks.push({ text, left, right: left + w });
+    }
+    if (marks.every((m, i) => !i || (m.left - marks[i - 1].right >= 12 && m.text !== marks[i - 1].text))) break;
   }
+  ctx.fillStyle = '#8ba0b4'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+  for (const m of marks) ctx.fillText(m.text, m.left, T + ph + 6);
 }
 
 function drawChart(s, a) {
@@ -813,12 +879,8 @@ on('btnUndo', 'click', undo);
 on('btnData', 'click', () => { viewing = null; openSheet(); });
 on('sheetClose', 'click', closeSheet);
 
-on('label', 'click', () => {
-  const v = prompt('Name this event', S.label || '');
-  if (v === null) return;
-  S.label = v.trim().slice(0, 60);
-  save(true); render(); refreshSheet(true);
-});
+on('label', 'click', () => renameEvent(S));
+on('sheetRename', 'click', () => renameEvent(cur()));
 
 on('btnEnd', 'click', () => {
   const f = fold(S);
