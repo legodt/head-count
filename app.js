@@ -1,0 +1,563 @@
+'use strict';
+/* Head Count - offline door counter. All state lives in localStorage and is
+   written on every tap, so a locked phone, a killed tab or a reboot mid-event
+   loses nothing. Timestamps are absolute epoch ms; nothing depends on the page
+   staying awake or on a timer surviving the night. */
+
+const K_ACTIVE = 'hc.active.v1', K_BAK = 'hc.active.bak.v1', K_ARCH = 'hc.arch.v1';
+const $ = id => document.getElementById(id);
+
+/* ---------------- storage ----------------
+   Wrapped because localStorage is not guaranteed: opened from file:// some
+   browsers throw on access, and any browser can throw on quota. The app must
+   keep counting either way, loudly. */
+
+const LS = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
+  del(k) { try { localStorage.removeItem(k); } catch {} },
+  probe() {
+    try {
+      localStorage.setItem('hc.probe', 'x');
+      const ok = localStorage.getItem('hc.probe') === 'x';
+      localStorage.removeItem('hc.probe');
+      return ok;
+    } catch { return false; }
+  }
+};
+
+let storageOk = true;
+function warnBanner(msg) { const el = $('warn'); el.textContent = msg; el.hidden = false; storageOk = false; }
+function clearBanner() { $('warn').hidden = true; storageOk = true; }
+
+/* ---------------- state ---------------- */
+
+const blank = () => ({ id: 's' + Date.now().toString(36), label: '', startedAt: null, endedAt: null, ev: [] });
+
+function readKey(k) {
+  try { const o = JSON.parse(LS.get(k) || 'null'); return o && Array.isArray(o.ev) ? o : null; }
+  catch { return null; }
+}
+function loadActive() {
+  const a = readKey(K_ACTIVE), b = readKey(K_BAK);
+  if (a && b) return b.ev.length > a.ev.length ? b : a;   // main write torn? take the fuller copy
+  return a || b || blank();
+}
+function loadArch() {
+  try { const a = JSON.parse(LS.get(K_ARCH) || '[]'); return Array.isArray(a) ? a : []; }
+  catch { return []; }
+}
+
+let S = loadActive();
+let ARCH = loadArch();
+let viewing = null;          // session shown in the data sheet (null = the live one)
+let tick = null, chartTick = null;
+
+// Every tap writes the whole session. A second copy lands every 10 taps and is
+// read back to prove the write landed, so a write torn by the OS killing the
+// tab costs at most a handful of taps.
+function save(forceBackup) {
+  const json = JSON.stringify(S);
+  if (!LS.set(K_ACTIVE, json)) {
+    warnBanner('Could not save the last tap - storage is full or blocked. Export the CSV now.');
+    return;
+  }
+  if (forceBackup || S.ev.length % 10 === 0) {
+    if (!LS.set(K_BAK, json) || LS.get(K_BAK) !== json) {
+      warnBanner('Backup copy is not saving. Export the CSV now.');
+      return;
+    }
+  }
+  if (!storageOk) clearBanner();
+}
+function saveArch() {
+  if (LS.set(K_ARCH, JSON.stringify(ARCH))) return;
+  ARCH = ARCH.slice(0, 10);
+  if (!LS.set(K_ARCH, JSON.stringify(ARCH))) warnBanner('Past events could not be saved. Export the CSV now.');
+}
+
+/* ---------------- derived ---------------- */
+
+function fold(s) {
+  let occ = 0, tin = 0, tout = 0, peak = 0, low = 0, peakAt = s.startedAt;
+  for (const [t, d] of s.ev) {
+    occ += d; d > 0 ? tin++ : tout++;
+    if (occ > peak) { peak = occ; peakAt = t; }
+    if (occ < low) low = occ;
+  }
+  return { occ, tin, tout, peak, low, peakAt, n: s.ev.length };
+}
+const endOf = s => s.endedAt || Date.now();
+const durOf = s => s.startedAt ? endOf(s) - s.startedAt : 0;
+
+/* ---------------- analysis ----------------
+   Everything here is derived from the tap log alone - no assumptions about
+   who anyone is, only how many and when. */
+
+// Most events inside any window of `win` ms, found by sliding the window
+// along the event times.
+function busiest(ts, win) {
+  if (!ts.length) return null;
+  let best = 0, at = ts[0], j = 0;
+  for (let i = 0; i < ts.length; i++) {
+    while (ts[i] - ts[j] > win) j++;
+    if (i - j + 1 > best) { best = i - j + 1; at = ts[j]; }
+  }
+  return { n: best, from: at, to: at + win, rate: best / (win / 3600000) };
+}
+
+function analyze(s) {
+  const f = fold(s);
+  const t0 = s.startedAt, t1 = endOf(s), span = Math.max(1, t1 - t0);
+  const ins = [], outs = [];
+  for (const [t, d] of s.ev) (d > 0 ? ins : outs).push(t);
+
+  // Area under the occupancy curve. Divided by arrivals it gives the average
+  // time a guest spent inside (Little's law) - the tap log never identifies
+  // anyone, so this is the only honest way to get a dwell time out of it.
+  let area = 0, occ = 0, prev = t0;
+  for (const [t, d] of s.ev) { area += occ * (t - prev); prev = t; occ += d; }
+  area += occ * (t1 - prev);
+
+  // Surge window scales with the event: a 20-minute session should not be
+  // measured against an hour-long window.
+  const win = Math.min(3600000, Math.max(300000, Math.round(span / 6)));
+  const tailWin = Math.min(1800000, Math.max(600000, Math.round(span / 8)));
+  let net = 0;
+  for (const [t, d] of s.ev) if (t >= t1 - tailWin) net += d;
+
+  return Object.assign(f, {
+    span, area,
+    avgStay: f.tin ? area / f.tin : 0,
+    surgeIn: busiest(ins, win),
+    surgeOut: busiest(outs, win),
+    medianIn: f.tin ? ins[Math.ceil(f.tin / 2) - 1] : null,
+    trend: net / (tailWin / 3600000),
+    turnover: f.peak ? f.tin / f.peak : 0,
+  });
+}
+
+function narrate(s, a) {
+  if (!a.n) return '';
+  const b = [];
+  if (a.surgeIn) b.push(`Arrivals ran hardest ${hm(a.surgeIn.from)}–${hm(a.surgeIn.to)}, about ${Math.round(a.surgeIn.rate)} an hour.`);
+  if (a.peak) b.push(`Fullest at ${hm(a.peakAt)} with ${a.peak} inside.`);
+  if (a.surgeOut && a.tout > 2) b.push(`Heaviest exits ${hm(a.surgeOut.from)}–${hm(a.surgeOut.to)}.`);
+  if (a.tin && a.turnover >= 1.35) b.push(`${a.tin} guests passed through a room that held at most ${a.peak}, so the crowd turned over about ${a.turnover.toFixed(1)}×.`);
+  if (!s.endedAt) {
+    b.push(Math.abs(a.trend) < 2 ? 'Right now it is holding steady.'
+      : `Right now it is ${a.trend > 0 ? 'filling' : 'emptying'} at about ${Math.abs(Math.round(a.trend))} an hour.`);
+  } else if (a.occ > 0) {
+    b.push(`${a.occ} ${a.occ === 1 ? 'person was' : 'people were'} still counted inside at the end.`);
+  }
+  return b.join(' ');
+}
+
+/* ---------------- formatting ---------------- */
+
+const p2 = n => String(n).padStart(2, '0');
+function hms(ms) {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  return p2(Math.floor(t / 3600)) + ':' + p2(Math.floor(t / 60) % 60) + ':' + p2(t % 60);
+}
+function durShort(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? h + 'h ' + r + 'm' : h + 'h';
+}
+const clockOf = t => { const d = new Date(t); return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()); };
+const hm = t => clockOf(t).slice(0, 5);
+const dateOf = t => { const d = new Date(t); return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()); };
+const stampOf = t => { const d = new Date(t); return '' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes()); };
+const localOf = t => dateOf(t) + ' ' + clockOf(t);
+const titleOf = s => s.label || (s.startedAt ? 'Event ' + dateOf(s.startedAt) : 'New event');
+
+/* ---------------- counting ---------------- */
+
+function record(d, pad) {
+  const t = Date.now();
+  if (!S.startedAt) S.startedAt = t;
+  S.ev.push([t, d]);
+  save(); render(); refreshSheet(false);
+  if (pad) { pad.classList.add('hit'); setTimeout(() => pad.classList.remove('hit'), 90); }
+  if (navigator.vibrate) navigator.vibrate(d > 0 ? 14 : [10, 30, 10]);
+  startTick();
+}
+
+function undo() {
+  if (!S.ev.length) return;
+  const last = S.ev.pop();
+  if (!S.ev.length) S.startedAt = null;
+  save(true);                       // the backup must not outlive the removed tap
+  render(); refreshSheet(true);
+  toast('Removed last ' + (last[1] > 0 ? 'IN' : 'OUT'));
+}
+
+function endEvent() {
+  S.endedAt = Date.now();
+  ARCH.unshift(S);
+  if (ARCH.length > 30) ARCH.length = 30;
+  saveArch();
+  const done = S;
+  S = blank();
+  LS.del(K_BAK);
+  save(); render();
+  viewing = done; openSheet();
+  toast('Event ended and saved');
+}
+
+/* ---------------- render ---------------- */
+
+function render() {
+  const f = fold(S);
+  const occEl = $('occ');
+  occEl.textContent = f.occ;
+  occEl.classList.toggle('neg', f.occ < 0);
+  $('tin').textContent = f.tin;
+  $('tout').textContent = f.tout;
+  $('peak').textContent = f.peak;
+  $('label').textContent = S.label || 'Tap to name event';
+  $('btnUndo').disabled = !f.n;
+  $('btnEnd').disabled = !f.n;
+  paintClock();
+}
+function paintClock() { $('clock').textContent = hms(durOf(S)); }
+
+function startTick() {
+  if (tick || document.hidden || !S.startedAt) return;
+  tick = setInterval(paintClock, 1000);
+}
+function stopTick() { clearInterval(tick); tick = null; }
+
+/* ---------------- data sheet ---------------- */
+
+const cur = () => viewing || S;
+
+function openSheet() {
+  $('sheet').hidden = false;
+  $('sheet').querySelector('.sheetbody').scrollTop = 0;
+  refreshSheet(true);
+  clearInterval(chartTick);
+  chartTick = setInterval(() => { if (!document.hidden && !cur().endedAt) refreshSheet(false); }, 2000);
+}
+function closeSheet() {
+  $('sheet').hidden = true; viewing = null;
+  clearInterval(chartTick); chartTick = null;
+}
+
+function refreshSheet(full) {
+  if ($('sheet').hidden) return;
+  const s = cur(), a = analyze(s);
+  $('sheetTitle').textContent = titleOf(s) + (s.endedAt ? ' (ended)' : ' (live)');
+
+  const rate = r => (r > 0 && r < 1 ? r.toFixed(1) : Math.round(r));
+  $('stats').innerHTML = [
+    [a.peak, 'peak inside', a.peak ? 'at ' + hm(a.peakAt) : ''],
+    [hms(a.span), 'duration', s.startedAt ? 'from ' + hm(s.startedAt) : ''],
+    [a.surgeIn ? '+' + rate(a.surgeIn.rate) + '/hr' : '—', 'peak arrivals',
+      a.surgeIn ? hm(a.surgeIn.from) + '–' + hm(a.surgeIn.to) : ''],
+    [a.surgeOut ? '−' + rate(a.surgeOut.rate) + '/hr' : '—', 'peak exits',
+      a.surgeOut ? hm(a.surgeOut.from) + '–' + hm(a.surgeOut.to) : ''],
+    [a.tin ? durShort(a.avgStay) : '—', 'avg stay', 'estimated'],
+    [a.medianIn ? hm(a.medianIn) : '—', 'half in by',
+      a.tin ? Math.ceil(a.tin / 2) + ' of ' + a.tin + ' arrivals' : ''],
+  ].map(r => '<div class="stat"><b>' + r[0] + '</b><span>' + r[1] + '</span><i>' + r[2] + '</i></div>').join('');
+
+  $('insight').textContent = narrate(s, a);
+  drawChart(s, a);
+  drawFlow(s);
+  if (full) { renderTable(s); renderArchive(); }
+}
+
+function renderTable(s) {
+  const CAP = 300, rows = [];
+  let occ = 0; const occs = s.ev.map(e => (occ += e[1]));
+  const from = Math.max(0, s.ev.length - CAP);
+  for (let i = s.ev.length - 1; i >= from; i--) {
+    const t = s.ev[i][0], d = s.ev[i][1];
+    rows.push('<tr><td>' + (i + 1) + '</td><td>' + clockOf(t) + '</td><td>' + hms(t - s.startedAt) +
+      '</td><td class="' + (d > 0 ? 'din' : 'dout') + '">' + (d > 0 ? 'IN' : 'OUT') +
+      '</td><td>' + occs[i] + '</td></tr>');
+  }
+  $('tbody').innerHTML = rows.join('') || '<tr><td colspan="5">No taps yet.</td></tr>';
+  $('tcap').textContent = s.ev.length > CAP
+    ? 'Newest first - showing last ' + CAP + ' of ' + s.ev.length + ' taps. Full log is in the CSV.'
+    : 'Newest first - ' + s.ev.length + ' tap' + (s.ev.length === 1 ? '' : 's') + '. Full log is in the CSV.';
+}
+
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function renderArchive() {
+  const box = $('archive');
+  if (!ARCH.length) { box.innerHTML = ''; return; }
+  box.innerHTML = '<h3>Past events</h3>' + ARCH.map((s, i) => {
+    const f = fold(s);
+    return '<div class="arow"><div class="who"><b>' + esc(titleOf(s)) + '</b><span>' +
+      localOf(s.startedAt || s.endedAt) + ' &middot; ' + hms(durOf(s)) + ' &middot; ' +
+      f.tin + ' in &middot; peak ' + f.peak + '</span></div>' +
+      '<button class="mini" data-view="' + i + '">View</button>' +
+      '<button class="mini" data-csv="' + i + '">CSV</button>' +
+      '<button class="mini danger" data-del="' + i + '">Delete</button></div>';
+  }).join('');
+}
+
+/* ---------------- charts ---------------- */
+
+// Shared frame setup: sizes the backing store for the display density and
+// returns the plot rectangle plus the session's time range.
+function frame(id, s) {
+  const c = $(id), ctx = c.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const W = c.clientWidth, H = c.clientHeight;
+  if (!W || !H) return null;
+  c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.font = '11px system-ui, sans-serif';
+  if (!s.startedAt) {
+    ctx.fillStyle = '#8ba0b4'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('Tap IN to start the session', W / 2, H / 2);
+    return null;
+  }
+  const L = 34, R = 10, T = 12, B = 22;
+  const t0 = s.startedAt, t1 = Math.max(endOf(s), t0 + 60000);
+  return { ctx, W, H, L, T, pw: W - L - R, ph: H - T - B, t0, t1, X: t => L + (t - t0) / (t1 - t0) * (W - L - R) };
+}
+
+function xAxis(g) {
+  const { ctx, L, T, pw, ph, t0, t1, X } = g;
+  const n = Math.max(2, Math.min(5, Math.floor(pw / 70)));
+  ctx.fillStyle = '#8ba0b4'; ctx.textBaseline = 'top';
+  for (let i = 0; i < n; i++) {
+    const t = t0 + (t1 - t0) * i / (n - 1);
+    ctx.textAlign = i === 0 ? 'left' : i === n - 1 ? 'right' : 'center';
+    ctx.fillText(hm(t), X(t), T + ph + 6);
+  }
+}
+
+function drawChart(s, a) {
+  const g = frame('chart', s); if (!g) return;
+  const { ctx, L, T, pw, ph, t0, t1, X } = g;
+
+  const top = Math.max(1, a.peak) * 1.08, bot = Math.min(0, a.low) * 1.08;
+  const step = niceStep((top - bot) / 4);
+  const yMax = Math.max(step, Math.ceil(top / step) * step);
+  const yMin = Math.min(0, Math.floor(bot / step) * step);
+  const Y = v => T + ph - (v - yMin) / (yMax - yMin) * ph;
+
+  ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.lineWidth = 1;
+  for (let v = yMin; v <= yMax + 1e-9; v += step) {
+    const y = Math.round(Y(v)) + 0.5;
+    ctx.strokeStyle = v === 0 ? '#3a4b5c' : '#1e2a36';
+    ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke();
+    ctx.fillStyle = '#8ba0b4'; ctx.fillText(String(v), L - 6, Y(v));
+  }
+
+  // step line: occupancy holds flat between taps
+  const pts = [[t0, 0]]; let occ = 0;
+  for (const e of s.ev) { pts.push([e[0], occ]); occ += e[1]; pts.push([e[0], occ]); }
+  pts.push([t1, occ]);
+
+  ctx.beginPath(); ctx.moveTo(X(t0), Y(0));
+  for (const p of pts) ctx.lineTo(X(p[0]), Y(p[1]));
+  ctx.lineTo(X(t1), Y(0)); ctx.closePath();
+  ctx.fillStyle = 'rgba(63,209,139,.16)'; ctx.fill();
+
+  ctx.beginPath();
+  pts.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1])));
+  ctx.strokeStyle = '#3fd18b'; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+
+  if (a.peak > 0) {
+    const px = X(a.peakAt), py = Y(a.peak), flip = px > L + pw - 46;
+    ctx.fillStyle = '#e8eef5';
+    ctx.beginPath(); ctx.arc(px, py, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.textBaseline = 'bottom'; ctx.textAlign = flip ? 'right' : 'left';
+    ctx.fillText('peak ' + a.peak, px + (flip ? -6 : 6), py - 4);
+  }
+  xAxis(g);
+}
+
+const BUCKETS = [60e3, 120e3, 300e3, 600e3, 900e3, 1800e3, 3600e3, 7200e3];
+
+// Arrivals above the line, exits below: the shape of the flow itself, which
+// the occupancy curve only shows as a slope.
+function drawFlow(s) {
+  const g = frame('flow', s); if (!g) return;
+  const { ctx, L, T, pw, ph, t0, t1, X } = g;
+
+  const unit = BUCKETS.find(u => (t1 - t0) / u <= 48) || BUCKETS[BUCKETS.length - 1];
+  const nb = Math.max(1, Math.ceil((t1 - t0) / unit));
+  const ins = new Array(nb).fill(0), outs = new Array(nb).fill(0);
+  for (const [t, d] of s.ev) {
+    const i = Math.min(nb - 1, Math.floor((t - t0) / unit));
+    if (d > 0) ins[i]++; else outs[i]++;
+  }
+  const max = Math.max(1, ...ins, ...outs);
+  const mid = T + ph / 2, half = ph / 2 - 2;
+  const bw = Math.max(1, pw / nb - 1);
+
+  ctx.strokeStyle = '#3a4b5c'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(L, Math.round(mid) + 0.5); ctx.lineTo(L + pw, Math.round(mid) + 0.5); ctx.stroke();
+
+  for (let i = 0; i < nb; i++) {
+    const x = X(t0 + i * unit);
+    if (ins[i]) { ctx.fillStyle = '#3fd18b'; ctx.fillRect(x, mid - ins[i] / max * half, bw, ins[i] / max * half); }
+    if (outs[i]) { ctx.fillStyle = '#ff8b83'; ctx.fillRect(x, mid + 1, bw, outs[i] / max * half); }
+  }
+
+  // Colour says which direction; the caption spells it out. Words here would
+  // overrun the narrow gutter.
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#3fd18b'; ctx.textBaseline = 'top'; ctx.fillText(String(max), L - 6, T);
+  ctx.fillStyle = '#ff8b83'; ctx.textBaseline = 'bottom'; ctx.fillText(String(max), L - 6, T + ph);
+  xAxis(g);
+
+  $('flowcap').textContent = 'Arrivals (up) and exits (down) per ' +
+    (unit >= 3600e3 ? unit / 3600e3 + ' hr' : unit / 60e3 + ' min');
+}
+
+// Nearest nice number, not the next one up: rounding 2.6 up to 5 leaves the
+// chart mostly empty space.
+function niceStep(x) {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1e-9)))), f = x / p;
+  let best = 1;
+  for (const c of [1, 2, 2.5, 5, 10]) if (Math.abs(Math.log(f / c)) < Math.abs(Math.log(f / best))) best = c;
+  return Math.max(1, Math.round(best * p) || 1);
+}
+
+/* ---------------- CSV ---------------- */
+
+function csvOf(s) {
+  const q = v => { v = String(v); return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const out = [['seq', 'iso_timestamp', 'local_time', 'epoch_ms', 'elapsed_s', 'elapsed_hms',
+    'direction', 'delta', 'occupancy', 'cumulative_in', 'cumulative_out']];
+  let occ = 0, ci = 0, co = 0;
+  s.ev.forEach((e, i) => {
+    const t = e[0], d = e[1];
+    occ += d; d > 0 ? ci++ : co++;
+    out.push([i + 1, new Date(t).toISOString(), localOf(t), t, ((t - s.startedAt) / 1000).toFixed(3),
+      hms(t - s.startedAt), d > 0 ? 'IN' : 'OUT', d, occ, ci, co]);
+  });
+  return out.map(r => r.map(q).join(',')).join('\r\n') + '\r\n';
+}
+function csvName(s) {
+  const slug = titleOf(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'event';
+  return 'headcount_' + slug + '_' + stampOf(s.startedAt || Date.now()) + '.csv';
+}
+const csvBlob = s => new Blob(['﻿' + csvOf(s)], { type: 'text/csv;charset=utf-8' });
+
+function downloadCsv(s) {
+  if (!s.ev.length) return toast('Nothing to export yet');
+  const url = URL.createObjectURL(csvBlob(s));
+  const a = document.createElement('a');
+  a.href = url; a.download = csvName(s);
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+async function shareCsv(s) {
+  if (!s.ev.length) return toast('Nothing to export yet');
+  try { await navigator.share({ files: [new File([csvBlob(s)], csvName(s), { type: 'text/csv' })], title: titleOf(s) }); }
+  catch {}
+}
+async function copyCsv(s) {
+  if (!s.ev.length) return toast('Nothing to export yet');
+  try { await navigator.clipboard.writeText(csvOf(s)); toast('CSV copied to clipboard'); }
+  catch { toast('Copy blocked - use Download instead'); }
+}
+
+/* ---------------- toast ---------------- */
+
+let toastT;
+function toast(msg) {
+  const el = $('toast'); el.textContent = msg; el.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 2200);
+}
+
+/* ---------------- wiring ---------------- */
+
+// pointerdown, not click: the tap must count the instant the finger lands.
+const padHandler = delta => e => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  record(delta, e.currentTarget);
+};
+$('padIn').addEventListener('pointerdown', padHandler(1));
+$('padOut').addEventListener('pointerdown', padHandler(-1));
+
+$('btnUndo').addEventListener('click', undo);
+$('btnData').addEventListener('click', () => { viewing = null; openSheet(); });
+$('sheetClose').addEventListener('click', closeSheet);
+
+$('label').addEventListener('click', () => {
+  const v = prompt('Name this event', S.label || '');
+  if (v === null) return;
+  S.label = v.trim().slice(0, 60);
+  save(true); render(); refreshSheet(true);
+});
+
+$('btnEnd').addEventListener('click', () => {
+  const f = fold(S);
+  $('dlgSummary').textContent = titleOf(S) + ' - ' + hms(durOf(S)) + ', ' + f.tin + ' in, ' +
+    f.tout + ' out, ' + f.occ + ' still inside.';
+  $('dlgEnd').showModal();
+});
+$('dlgCancel').addEventListener('click', () => $('dlgEnd').close());
+$('dlgConfirm').addEventListener('click', () => { $('dlgEnd').close(); endEvent(); });
+
+$('btnCsv').addEventListener('click', () => downloadCsv(cur()));
+$('btnCopy').addEventListener('click', () => copyCsv(cur()));
+$('btnShare').addEventListener('click', () => shareCsv(cur()));
+try {
+  if (navigator.canShare && navigator.canShare({ files: [new File([''], 'a.csv', { type: 'text/csv' })] }))
+    $('btnShare').hidden = false;
+} catch {}
+
+$('archive').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.view != null) {
+    viewing = ARCH[+b.dataset.view];
+    $('sheet').querySelector('.sheetbody').scrollTop = 0;
+    refreshSheet(true);
+  } else if (b.dataset.csv != null) {
+    downloadCsv(ARCH[+b.dataset.csv]);
+  } else if (b.dataset.del != null) {
+    const i = +b.dataset.del, s = ARCH[i];
+    if (!confirm('Delete "' + titleOf(s) + '" permanently? Export the CSV first if you need it.')) return;
+    ARCH.splice(i, 1); saveArch();
+    if (viewing === s) viewing = null;
+    refreshSheet(true);
+  }
+});
+
+document.addEventListener('keydown', e => {           // desktop testing
+  if ($('dlgEnd').open) return;
+  if (e.key === 'ArrowUp' || e.key === 'i') record(1, $('padIn'));
+  else if (e.key === 'ArrowDown' || e.key === 'o') record(-1, $('padOut'));
+  else if (e.key === 'Escape' && !$('sheet').hidden) closeSheet();
+});
+
+// Re-read storage on every return to the foreground: the tab may have been
+// evicted and rebuilt, or a second tab may have moved the count on.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { stopTick(); return; }
+  if (!LS.probe()) warnBanner('This browser is not saving your count. Export the CSV before closing this tab.');
+  else {
+    if (!storageOk) clearBanner();
+    S = loadActive(); ARCH = loadArch();
+  }
+  render(); startTick(); refreshSheet(true);
+});
+window.addEventListener('pageshow', () => { S = loadActive(); render(); startTick(); });
+window.addEventListener('storage', e => {
+  if (e.key === K_ACTIVE) { S = loadActive(); render(); refreshSheet(true); }
+});
+window.addEventListener('resize', () => refreshSheet(false));
+
+/* ---------------- boot ---------------- */
+
+render(); startTick();
+if (!LS.probe())
+  warnBanner('This browser is not saving your count. Keep this tab open and export the CSV before closing it.');
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+if ('serviceWorker' in navigator && location.protocol !== 'file:')
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
