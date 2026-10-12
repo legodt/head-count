@@ -1,0 +1,1009 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Door Read</title>
+<meta name="description" content="Drop a Head Count CSV and read the night: occupancy, flow, dwell estimates, hour by hour, and checks on the log itself.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Oswald:wght@500;600&display=swap">
+<style>
+/* Layout: one night read top to bottom — masthead, headline numbers, the night
+   in charts, then the detail anyone would want to argue with. */
+:root{
+  --bg:#F4F5F7; --panel:#FFFFFF; --sunk:#EFF1F5; --line:#DDE2EA; --grid:#E7EAF1;
+  --ink:#141922; --ink2:#49546B; --ink3:#79849A;
+  --in:#1F9D74; --out:#D97706; --accent:#3B5BDB;
+  --flagbg:#FFF6E5; --flag:#92400E; --bad:#B42318; --ok:#1F9D74;
+  --display:'Oswald','Arial Narrow',system-ui,sans-serif;
+  --body:'Archivo',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',Menlo,monospace;
+  --radius:12px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1218; --panel:#161B23; --sunk:#11151C; --line:#273040; --grid:#222A36;
+    --ink:#E9EDF4; --ink2:#A8B4C7; --ink3:#7A8699;
+    --in:#46C79E; --out:#F0A345; --accent:#8AA4FF;
+    --flagbg:#2A2109; --flag:#F0C04A; --bad:#FF8A7A; --ok:#46C79E;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1218; --panel:#161B23; --sunk:#11151C; --line:#273040; --grid:#222A36;
+  --ink:#E9EDF4; --ink2:#A8B4C7; --ink3:#7A8699;
+  --in:#46C79E; --out:#F0A345; --accent:#8AA4FF;
+  --flagbg:#2A2109; --flag:#F0C04A; --bad:#FF8A7A; --ok:#46C79E;
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.5 var(--body);
+  padding:0 20px 72px;
+}
+.wrap{max-width:1080px;margin:0 auto}
+h1,h2,h3{margin:0;text-wrap:balance}
+p{margin:0}
+button{font:inherit}
+img{max-width:100%}
+[hidden]{display:none !important}
+
+/* ---------- masthead ---------- */
+.mast{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end;justify-content:space-between;
+  padding:28px 0 18px;border-bottom:1px solid var(--line)}
+.brand h1{font:600 34px/1 var(--display);letter-spacing:.06em;text-transform:uppercase}
+.brand p{color:var(--ink2);font-size:14.5px;margin-top:6px;max-width:46ch}
+.load{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:999px;
+  padding:9px 16px;font-size:14px;font-weight:500;cursor:pointer}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{filter:brightness(1.08);color:#fff}
+.btn:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.source{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;padding:14px 0 0;
+  color:var(--ink3);font-size:13px}
+.source b{color:var(--ink2);font-weight:500}
+.sample-chip{background:var(--flagbg);color:var(--flag);border-radius:999px;padding:2px 10px;
+  font-size:12px;font-weight:500}
+
+/* ---------- drop zone ---------- */
+.drop{border:1.5px dashed var(--line);border-radius:var(--radius);padding:10px 16px;
+  color:var(--ink2);font-size:14px;background:var(--panel)}
+body.dragging .drop{border-color:var(--accent);color:var(--accent)}
+.dropveil{position:fixed;inset:0;background:color-mix(in srgb,var(--accent) 12%,transparent);
+  border:2px dashed var(--accent);z-index:50;display:grid;place-items:center;
+  font:600 20px var(--display);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+
+/* ---------- sections ---------- */
+section{padding-block:30px;border-bottom:1px solid var(--line)}
+section:last-of-type{border-bottom:0}
+.eyebrow{font:500 12px/1 var(--display);letter-spacing:.18em;text-transform:uppercase;color:var(--ink3)}
+h2{font:500 23px/1.2 var(--display);letter-spacing:.04em;text-transform:uppercase;margin-top:8px}
+.lede{color:var(--ink2);font-size:14.5px;margin-top:6px;max-width:68ch}
+
+/* ---------- headline tiles ---------- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:18px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;min-width:0}
+.tile b{display:block;font:500 30px/1.05 var(--display);letter-spacing:.01em;font-variant-numeric:tabular-nums}
+.tile span{display:block;margin-top:7px;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3)}
+.tile i{display:block;font-style:normal;color:var(--ink2);font-size:13px;margin-top:5px}
+.tile.in b{color:var(--in)} .tile.out b{color:var(--out)}
+
+/* ---------- read ---------- */
+.read{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:var(--radius);padding:18px 20px;margin-top:18px}
+.read p+p{margin-top:10px}
+.read p{font-size:16px;line-height:1.6;color:var(--ink)}
+.readfoot{display:flex;justify-content:flex-end;margin-top:14px}
+
+/* ---------- phases ---------- */
+.phases{margin-top:18px}
+.phasebar{display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.phasebar div{min-width:2px}
+.phasekey{display:flex;flex-wrap:wrap;gap:14px 22px;margin-top:12px;font-size:13px;color:var(--ink2)}
+.phasekey span{display:flex;gap:7px;align-items:baseline}
+.swatch{width:10px;height:10px;border-radius:3px;flex:0 0 auto;transform:translateY(1px)}
+
+/* ---------- charts ---------- */
+.controls{display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-top:18px;
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 16px}
+.controls label{font-size:13px;color:var(--ink2);display:flex;gap:8px;align-items:center}
+select,input[type="number"]{font:inherit;font-size:14px;padding:6px 9px;border-radius:8px;
+  border:1px solid var(--line);background:var(--sunk);color:var(--ink)}
+input[type="number"]{width:98px}
+
+figure{margin:22px 0 0}
+figcaption{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;justify-content:space-between;
+  margin-bottom:8px}
+.figtitle{font-size:15px;font-weight:600}
+.fignote{color:var(--ink3);font-size:13px}
+.legend{display:flex;gap:14px;font-size:13px;color:var(--ink2)}
+.legend span{display:flex;gap:6px;align-items:center}
+.plot{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:10px 8px 6px}
+.plot svg{display:block;width:100%;height:auto;overflow:visible}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);border-radius:8px;
+  padding:7px 10px;font:500 12.5px/1.45 var(--body);white-space:nowrap;z-index:4;
+  box-shadow:0 6px 18px rgba(0,0,0,.22);transform:translate(-50%,-115%)}
+.tip b{font-family:var(--mono);font-weight:500}
+.axis{font:400 11.5px var(--mono);fill:var(--ink3)}
+.gridline{stroke:var(--grid);stroke-width:1}
+.zero{stroke:var(--ink3);stroke-width:1;opacity:.55}
+.mark{fill:var(--ink);font:500 12px var(--body)}
+
+/* ---------- tables ---------- */
+.scroll{overflow-x:auto;margin-top:18px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:14px;font-variant-numeric:tabular-nums}
+th{font:500 11px/1 var(--display);letter-spacing:.12em;text-transform:uppercase;color:var(--ink3);
+  text-align:right;padding:11px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+td{padding:9px 12px;border-bottom:1px solid var(--grid);text-align:right;white-space:nowrap;font-family:var(--mono);font-size:13px}
+tr:last-child td{border-bottom:0}
+td.word{font-family:var(--body);font-size:14px}
+.bar{display:block;height:7px;border-radius:999px;background:var(--accent);opacity:.85;min-width:2px}
+.din{color:var(--in)} .dout{color:var(--out)}
+
+/* ---------- checks ---------- */
+.checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:12px;margin-top:18px}
+.check{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;
+  display:flex;gap:12px;align-items:flex-start}
+.check.flag{background:var(--flagbg);border-color:color-mix(in srgb,var(--flag) 35%,var(--line))}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--ok);flex:0 0 auto;margin-top:6px}
+.check.flag .dot{background:var(--flag)}
+.check b{display:block;font-size:14px;font-weight:600}
+.check span{display:block;color:var(--ink2);font-size:13px;margin-top:3px}
+
+details{margin-top:18px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+summary{cursor:pointer;padding:14px 16px;font-size:14px;font-weight:500}
+details .scroll{margin:0;border:0;border-top:1px solid var(--line);border-radius:0;max-height:430px;overflow-y:auto}
+
+.foot{color:var(--ink3);font-size:13px;padding-top:26px;max-width:72ch}
+.foot a{color:var(--accent)}
+.error{background:var(--flagbg);color:var(--flag);border:1px solid var(--flag);border-radius:var(--radius);
+  padding:14px 16px;margin-top:18px;font-size:14px}
+
+@media (max-width:560px){
+  .brand h1{font-size:28px}
+  body{padding:0 16px 56px}
+  .tile b{font-size:26px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none !important;animation:none !important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="mast">
+  <div class="brand">
+    <h1>Door Read</h1>
+    <p>Drop a Head Count CSV. Everything is worked out in this page — the file never leaves your browser.</p>
+  </div>
+  <div class="load">
+    <span class="drop" id="drop">Drop a CSV here, or paste one</span>
+    <button class="btn primary" id="pick" type="button">Choose file</button>
+    <button class="btn" id="sample" type="button">Sample night</button>
+    <input type="file" id="file" accept=".csv,text/csv,text/plain" hidden>
+  </div>
+</header>
+
+<p class="source" id="source"></p>
+<div class="error" id="error" hidden></div>
+
+<main id="report" hidden>
+
+  <section>
+    <div class="eyebrow">The night</div>
+    <h2 id="headline">Event</h2>
+    <div class="tiles" id="tiles"></div>
+    <div class="read" id="read">
+      <div id="narrative"></div>
+      <div class="readfoot"><button class="btn" id="copy" type="button">Copy this read</button></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Charts</div>
+    <h2>Occupancy and flow</h2>
+    <div class="controls">
+      <label>Bucket
+        <select id="bucket">
+          <option value="300000">5 min</option>
+          <option value="600000" selected>10 min</option>
+          <option value="900000">15 min</option>
+          <option value="1800000">30 min</option>
+          <option value="3600000">1 hour</option>
+        </select>
+      </label>
+      <label>Capacity <input type="number" id="capacity" min="0" step="10" placeholder="none"></label>
+      <span class="fignote" id="caphint"></span>
+    </div>
+
+    <figure>
+      <figcaption>
+        <span class="figtitle">People inside</span>
+        <span class="fignote" id="occnote"></span>
+      </figcaption>
+      <div class="plot" id="plotOcc"></div>
+    </figure>
+
+    <figure>
+      <figcaption>
+        <span class="figtitle">Arrivals and exits</span>
+        <span class="legend">
+          <span><i class="swatch" style="background:var(--in)"></i>Arrivals (up)</span>
+          <span><i class="swatch" style="background:var(--out)"></i>Exits (down)</span>
+        </span>
+      </figcaption>
+      <div class="plot" id="plotFlow"></div>
+    </figure>
+
+    <figure>
+      <figcaption>
+        <span class="figtitle">Velocity — how fast the room was filling or emptying</span>
+        <span class="fignote">People per hour, net</span>
+      </figcaption>
+      <div class="plot" id="plotVel"></div>
+    </figure>
+
+    <figure>
+      <figcaption>
+        <span class="figtitle">Cumulative arrivals and exits</span>
+        <span class="legend">
+          <span><i class="swatch" style="background:var(--in)"></i>Arrived</span>
+          <span><i class="swatch" style="background:var(--out)"></i>Left</span>
+        </span>
+      </figcaption>
+      <div class="plot" id="plotCum"></div>
+    </figure>
+  </section>
+
+  <section>
+    <div class="eyebrow">Shape of the night</div>
+    <h2>Phases</h2>
+    <p class="lede">Split on 80% of peak occupancy: filling until the room first reaches it, held while it stays there, emptying after it drops away for good.</p>
+    <div class="phases">
+      <div class="phasebar" id="phasebar"></div>
+      <div class="phasekey" id="phasekey"></div>
+    </div>
+    <div class="tiles" id="phasetiles"></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Hour by hour</div>
+    <h2>The night in rows</h2>
+    <div class="scroll" id="hours"></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">How long people stayed</div>
+    <h2>Dwell estimate</h2>
+    <p class="lede">The log counts bodies, not people, so this pairs each exit with the earliest guest still inside. It is right on average and wrong for any individual — a guest who stayed all night is counted as a short visit if someone left early.</p>
+    <div class="tiles" id="dwelltiles"></div>
+    <figure>
+      <figcaption>
+        <span class="figtitle">Estimated length of stay</span>
+        <span class="fignote" id="dwellnote"></span>
+      </figcaption>
+      <div class="plot" id="plotDwell"></div>
+    </figure>
+  </section>
+
+  <section>
+    <div class="eyebrow">Before you trust it</div>
+    <h2>Checks on the log</h2>
+    <div class="checks" id="checks"></div>
+    <details>
+      <summary id="logsummary">Every tap</summary>
+      <div class="scroll" id="log"></div>
+    </details>
+  </section>
+
+  <p class="foot" id="foot"></p>
+</main>
+</div>
+
+<script>
+'use strict';
+/* Door Read — reads a Head Count CSV and works the night out in the page.
+   Nothing is uploaded, nothing is stored. Times are shown as they were at the
+   door: the CSV carries both epoch_ms and the local time it was recorded in,
+   so the event's own UTC offset is recovered per row and used for every label,
+   whatever zone the reader is in. */
+
+const $ = s => document.querySelector(s);
+const el = (tag, cls, txt) => { const n = document.createElement(tag); if (cls) n.className = cls; if (txt != null) n.textContent = txt; return n; };
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ---------------- CSV ---------------- */
+
+function parseCsv(text) {
+  text = text.replace(/^﻿/, '');
+  const rows = []; let row = [], cell = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else quoted = false; }
+      else cell += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else if (c !== '\r') cell += c;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(v => v.trim() !== ''));
+}
+
+// "2026-09-12 9:05:03 PM" or "2026-09-12 21:05:03" -> ms as if that wall time were UTC
+function wallMs(s) {
+  const m = String(s).trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (!m) return null;
+  let h = +m[4];
+  const mer = (m[7] || '').toUpperCase();
+  if (mer === 'PM' && h < 12) h += 12;
+  if (mer === 'AM' && h === 12) h = 0;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], h, +m[5], +(m[6] || 0));
+}
+
+const DIR = v => { const s = String(v).trim().toUpperCase(); return s === 'IN' ? 1 : s === 'OUT' ? -1 : 0; };
+
+/* Reads the app's export by column name, and anything else by sniffing:
+   a column of epoch milliseconds or parseable timestamps, and a column that
+   says IN/OUT or +1/-1. */
+function readEvents(rows) {
+  if (!rows.length) throw new Error('That file is empty.');
+  const head = rows[0].map(h => h.trim().toLowerCase());
+  const known = ['epoch_ms', 'iso_timestamp', 'direction', 'delta', 'local_time'].some(k => head.includes(k));
+  const body = known ? rows.slice(1) : rows;
+  const col = n => head.indexOf(n);
+
+  let iEpoch = col('epoch_ms'), iIso = col('iso_timestamp'), iLocal = col('local_time'),
+      iDir = col('direction'), iDelta = col('delta');
+
+  if (!known) {                                   // sniff a header-less or renamed file
+    const probe = body.slice(0, 40);
+    const width = Math.max(...probe.map(r => r.length));
+    for (let c = 0; c < width; c++) {
+      const vals = probe.map(r => (r[c] || '').trim()).filter(Boolean);
+      if (!vals.length) continue;
+      if (iEpoch < 0 && vals.every(v => /^\d{12,14}$/.test(v))) iEpoch = c;
+      else if (iIso < 0 && vals.every(v => !isNaN(Date.parse(v)) && /[-:]/.test(v))) iIso = c;
+      if (iDir < 0 && vals.every(v => DIR(v) !== 0)) iDir = c;
+      else if (iDelta < 0 && vals.every(v => v === '1' || v === '-1' || v === '+1')) iDelta = c;
+    }
+  }
+  if (iEpoch < 0 && iIso < 0 && iLocal < 0) throw new Error('No timestamp column found. Head Count CSVs have epoch_ms and iso_timestamp.');
+  if (iDir < 0 && iDelta < 0) throw new Error('No direction column found. Head Count CSVs have direction (IN/OUT) and delta (+1/-1).');
+
+  const ev = [];
+  let offMissing = 0;
+  for (const r of body) {
+    let t = null;
+    if (iEpoch >= 0 && /^\d{12,14}$/.test((r[iEpoch] || '').trim())) t = +r[iEpoch];
+    else if (iIso >= 0 && r[iIso]) { const p = Date.parse(r[iIso]); if (!isNaN(p)) t = p; }
+    else if (iLocal >= 0 && r[iLocal]) { const w = wallMs(r[iLocal]); if (w != null) t = w; }
+    if (t == null) continue;
+
+    let d = 0;
+    if (iDir >= 0) d = DIR(r[iDir]);
+    if (!d && iDelta >= 0) d = +r[iDelta] > 0 ? 1 : +r[iDelta] < 0 ? -1 : 0;
+    if (!d) continue;
+
+    // The offset the door was keeping, recovered per row so a clock change mid-event survives.
+    let off = null;
+    if (iLocal >= 0 && r[iLocal]) { const w = wallMs(r[iLocal]); if (w != null) off = Math.round((w - t) / 60000); }
+    if (off == null) offMissing++;
+    ev.push({ t, d, off });
+  }
+  if (ev.length < 2) throw new Error('Found fewer than two taps in that file.');
+  ev.sort((a, b) => a.t - b.t);
+
+  // Rows without a local_time fall back to the nearest row that had one, then to this device.
+  const anyOff = ev.find(e => e.off != null);
+  const deviceOff = -new Date().getTimezoneOffset();
+  let last = anyOff ? anyOff.off : deviceOff;
+  for (const e of ev) { if (e.off == null) e.off = last; else last = e.off; }
+  return { ev, ownZone: !anyOff, partial: offMissing > 0 && !!anyOff };
+}
+
+/* ---------------- time ---------------- */
+
+const p2 = n => String(n).padStart(2, '0');
+let EV = [];                                       // current event, for offset lookup
+
+function offAt(t) {                                 // offset in force at that moment
+  if (!EV.length) return -new Date().getTimezoneOffset();
+  let lo = 0, hi = EV.length - 1;
+  if (t <= EV[0].t) return EV[0].off;
+  if (t >= EV[hi].t) return EV[hi].off;
+  while (lo < hi - 1) { const mid = (lo + hi) >> 1; if (EV[mid].t <= t) lo = mid; else hi = mid; }
+  return EV[lo].off;
+}
+const parts = t => new Date(t + offAt(t) * 60000);  // read with getUTC* only
+function hm(t, secs) {
+  const d = parts(t), h = d.getUTCHours();
+  return (h % 12 || 12) + ':' + p2(d.getUTCMinutes()) + (secs ? ':' + p2(d.getUTCSeconds()) : '') + (h < 12 ? ' AM' : ' PM');
+}
+const WD = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MO = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function dayOf(t) { const d = parts(t); return WD[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + MO[d.getUTCMonth()] + ' ' + d.getUTCFullYear(); }
+function spanOf(a, b) { const x = hm(a), y = hm(b); return x.slice(-2) === y.slice(-2) ? x.slice(0, -3) + '–' + y : x + '–' + y; }
+function durShort(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return m + ' min';
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? h + 'h ' + r + 'm' : h + 'h';
+}
+function mmss(ms) { const s = Math.round(ms / 1000); return s < 60 ? s + 's' : Math.floor(s / 60) + 'm ' + p2(s % 60) + 's'; }
+const num = n => n.toLocaleString();
+
+/* ---------------- analysis ---------------- */
+
+function analyse(ev) {
+  const t0 = ev[0].t, t1 = ev[ev.length - 1].t, span = Math.max(1, t1 - t0);
+  const series = [{ t: t0, o: 0 }], ins = [], outs = [];
+  let occ = 0, peak = 0, peakAt = t0, low = 0, lowAt = t0, area = 0, prev = t0, negMs = 0;
+
+  for (const e of ev) {
+    area += occ * (e.t - prev);
+    if (occ < 0) negMs += e.t - prev;
+    prev = e.t;
+    occ += e.d;
+    (e.d > 0 ? ins : outs).push(e.t);
+    if (occ > peak) { peak = occ; peakAt = e.t; }
+    if (occ < low) { low = occ; lowAt = e.t; }
+    series.push({ t: e.t, o: occ });
+  }
+
+  const thr = peak * 0.8;
+  let fullFrom = null, fullTo = null, fullMs = 0;
+  for (let i = 1; i < series.length; i++) {
+    const held = series[i - 1].o >= thr && thr > 0;
+    if (held) { fullMs += series[i].t - series[i - 1].t; if (fullFrom == null) fullFrom = series[i - 1].t; fullTo = series[i].t; }
+  }
+
+  // time the room took to shed half its peak, measured from the peak
+  let halfOut = null;
+  for (let i = 0; i < series.length; i++) if (series[i].t >= peakAt && series[i].o <= peak / 2) { halfOut = series[i].t; break; }
+
+  const best = (times, win) => {
+    if (!times.length) return null;
+    let n = 0, at = times[0], j = 0;
+    for (let i = 0; i < times.length; i++) {
+      while (times[i] - times[j] > win) j++;
+      if (i - j + 1 > n) { n = i - j + 1; at = times[j]; }
+    }
+    return { n, from: at, to: at + win, rate: n / (win / 3600000) };
+  };
+
+  // one guest in, one guest out, oldest first: an average that is honest, an individual that is not
+  const queue = [], stays = [];
+  let unmatchedExits = 0;
+  for (const e of ev) {
+    if (e.d > 0) queue.push(e.t);
+    else if (queue.length) stays.push(e.t - queue.shift());
+    else unmatchedExits++;
+  }
+  stays.sort((a, b) => a - b);
+  const pct = q => stays.length ? stays[Math.min(stays.length - 1, Math.floor(q * stays.length))] : 0;
+
+  // the longest stretch with nobody through the door, for the log checks
+  let gap = { ms: 0, at: t0 };
+  for (let i = 1; i < ev.length; i++) if (ev[i].t - ev[i - 1].t > gap.ms) gap = { ms: ev[i].t - ev[i - 1].t, at: ev[i - 1].t };
+
+  let doubles = 0;
+  for (let i = 1; i < ev.length; i++) if (ev[i].d === ev[i - 1].d && ev[i].t - ev[i - 1].t < 300) doubles++;
+
+  const win = Math.min(3600000, Math.max(300000, Math.round(span / 6)));
+  return {
+    t0, t1, span, series, ins, outs, peak, peakAt, low, lowAt, negMs,
+    tin: ins.length, tout: outs.length, inside: occ,
+    area, avgStay: ins.length ? area / ins.length : 0, avgOcc: area / span,
+    turnover: peak ? ins.length / peak : 0,
+    medianIn: ins.length ? ins[Math.ceil(ins.length / 2) - 1] : null,
+    medianOut: outs.length ? outs[Math.ceil(outs.length / 2) - 1] : null,
+    thr, fullFrom, fullTo, fullMs, halfOut,
+    surgeIn: best(ins, win), surgeOut: best(outs, win), win,
+    stays, p25: pct(0.25), p50: pct(0.5), p75: pct(0.75), p90: pct(0.9), unmatchedExits,
+    gap, doubles,
+  };
+}
+
+function buckets(ev, unit, t0, t1) {
+  const n = Math.max(1, Math.ceil((t1 - t0) / unit)), out = [];
+  for (let i = 0; i < n; i++) out.push({ t: t0 + i * unit, in: 0, out: 0 });
+  for (const e of ev) {
+    const b = out[Math.min(n - 1, Math.floor((e.t - t0) / unit))];
+    if (e.d > 0) b.in++; else b.out++;
+  }
+  for (const b of out) b.net = b.in - b.out;
+  return out;
+}
+
+function hourRows(ev, t0, t1) {
+  const rows = new Map();
+  let occ = 0;
+  for (const e of ev) {
+    const d = parts(e.t);
+    const key = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours());
+    let r = rows.get(key);
+    if (!r) { r = { key, label: hm(e.t).replace(/:\d\d/, ':00'), in: 0, out: 0, peak: occ, end: occ }; rows.set(key, r); }
+    occ += e.d;
+    if (e.d > 0) r.in++; else r.out++;
+    if (occ > r.peak) r.peak = occ;
+    r.end = occ;
+  }
+  return [...rows.values()];
+}
+
+/* ---------------- charts ---------------- */
+
+const PAD = { l: 44, r: 16, t: 16, b: 26 };
+const STEPS = [1, 2, 2.5, 5, 10];
+function niceStep(x) {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1e-9))));
+  let best = STEPS[0];
+  for (const c of STEPS) if (Math.abs(Math.log((x / p) / c)) < Math.abs(Math.log((x / p) / best))) best = c;
+  return Math.max(1, Math.round(best * p) || 1);
+}
+// clock ticks on round local times, so the axis reads like a clock and not like a stopwatch
+const TICKS = [300000, 600000, 900000, 1800000, 3600000, 7200000, 10800000, 21600000];
+function timeTicks(t0, t1, max) {
+  const unit = TICKS.find(u => (t1 - t0) / u <= max) || TICKS[TICKS.length - 1];
+  const off = offAt(t0) * 60000;
+  const out = [];
+  for (let t = Math.ceil((t0 + off) / unit) * unit - off; t <= t1; t += unit) out.push(t);
+  return out.length >= 2 ? out : [t0, t1];
+}
+
+function plot(host, h, draw) {
+  const w = Math.max(300, host.clientWidth - 16);
+  const g = {
+    w, h, pw: w - PAD.l - PAD.r, ph: h - PAD.t - PAD.b, parts: [],
+    X: null, Y: null,
+    push(s) { this.parts.push(s); },
+  };
+  draw(g);
+  host.innerHTML = '<svg viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '" role="img">' + g.parts.join('') + '</svg>';
+  return g;
+}
+const line = (x1, y1, x2, y2, cls) => '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" class="' + cls + '"/>';
+const text = (x, y, s, cls, anchor) => '<text x="' + x + '" y="' + y + '" class="' + cls + '"' + (anchor ? ' text-anchor="' + anchor + '"' : '') + '>' + esc(s) + '</text>';
+
+function yAxis(g, min, max, fmt) {
+  const step = niceStep((max - min) / 4);
+  const top = Math.ceil(max / step) * step || step, bot = Math.min(0, Math.floor(min / step) * step);
+  g.Y = v => PAD.t + g.ph - (v - bot) / ((top - bot) || 1) * g.ph;
+  for (let v = bot; v <= top + 1e-9; v += step) {
+    const y = Math.round(g.Y(v)) + 0.5;
+    g.push(line(PAD.l, y, PAD.l + g.pw, y, v === 0 ? 'zero' : 'gridline'));
+    g.push(text(PAD.l - 8, y + 4, fmt ? fmt(v) : String(v), 'axis', 'end'));
+  }
+  return { top, bot };
+}
+function xAxis(g, t0, t1) {
+  const ticks = timeTicks(t0, t1, Math.max(2, Math.floor(g.pw / 86)));
+  for (const t of ticks) {
+    const x = g.X(t);
+    const anchor = x < PAD.l + 24 ? 'start' : x > PAD.l + g.pw - 24 ? 'end' : 'middle';
+    g.push(text(x, PAD.t + g.ph + 18, hm(t), 'axis', anchor));
+  }
+}
+
+function hover(host, g, hit) {
+  const tip = el('div', 'tip');
+  tip.hidden = true;
+  host.appendChild(tip);
+  const svg = host.querySelector('svg');
+  const crosshair = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  crosshair.setAttribute('class', 'zero');
+  crosshair.setAttribute('y1', PAD.t);
+  crosshair.setAttribute('y2', PAD.t + g.ph);
+  crosshair.style.display = 'none';
+  svg.appendChild(crosshair);
+
+  const move = e => {
+    const r = svg.getBoundingClientRect();
+    const x = (e.clientX - r.left) * (g.w / r.width);
+    const found = hit(x);
+    if (!found) { tip.hidden = true; crosshair.style.display = 'none'; return; }
+    tip.innerHTML = found.html;
+    tip.hidden = false;
+    const px = found.x * (r.width / g.w);
+    tip.style.left = Math.max(60, Math.min(r.width - 60, px)) + 'px';
+    tip.style.top = (found.y != null ? found.y * (r.height / g.h) : 40) + 'px';
+    crosshair.setAttribute('x1', found.x); crosshair.setAttribute('x2', found.x);
+    crosshair.style.display = '';
+  };
+  host.addEventListener('pointermove', move);
+  host.addEventListener('pointerleave', () => { tip.hidden = true; crosshair.style.display = 'none'; });
+}
+
+function drawOccupancy(host, a, cap) {
+  const g = plot(host, 260, g => {
+    g.X = t => PAD.l + (t - a.t0) / a.span * g.pw;
+    const top = Math.max(a.peak, cap || 0);
+    const yr = yAxis(g, Math.min(0, a.low), top * 1.08 || 1);
+    // step line: occupancy holds flat between taps
+    let d = 'M' + g.X(a.t0) + ' ' + g.Y(0), fill = d;
+    let px = g.X(a.t0), py = g.Y(0);
+    for (const p of a.series) {
+      const x = g.X(p.t), y = g.Y(p.o);
+      d += 'L' + x + ' ' + py + 'L' + x + ' ' + y;
+      fill += 'L' + x + ' ' + py + 'L' + x + ' ' + y;
+      px = x; py = y;
+    }
+    d += 'L' + g.X(a.t1) + ' ' + py;
+    fill += 'L' + g.X(a.t1) + ' ' + py + 'L' + g.X(a.t1) + ' ' + g.Y(0) + 'Z';
+    if (a.fullFrom != null && a.fullTo != null) {
+      g.push('<rect x="' + g.X(a.fullFrom) + '" y="' + PAD.t + '" width="' + Math.max(1, g.X(a.fullTo) - g.X(a.fullFrom)) +
+        '" height="' + g.ph + '" fill="var(--accent)" opacity="0.07"/>');
+    }
+    g.push('<path d="' + fill + '" fill="var(--in)" opacity="0.14"/>');
+    g.push('<path d="' + d + '" fill="none" stroke="var(--in)" stroke-width="2" stroke-linejoin="round"/>');
+    if (cap) {
+      const y = Math.round(g.Y(cap)) + 0.5;
+      g.push(line(PAD.l, y, PAD.l + g.pw, y, '') .replace('class=""', 'stroke="var(--out)" stroke-width="1.5" stroke-dasharray="5 4"'));
+      g.push(text(PAD.l + g.pw, y - 6, 'capacity ' + num(cap), 'axis', 'end'));
+    }
+    const px2 = g.X(a.peakAt), py2 = g.Y(a.peak), flip = px2 > PAD.l + g.pw - 70;
+    g.push('<circle cx="' + px2 + '" cy="' + py2 + '" r="4" fill="var(--in)" stroke="var(--panel)" stroke-width="2"/>');
+    g.push(text(px2 + (flip ? -8 : 8), py2 - 9, 'peak ' + num(a.peak) + ' at ' + hm(a.peakAt), 'mark', flip ? 'end' : 'start'));
+    xAxis(g, a.t0, a.t1);
+  });
+  hover(host, g, x => {
+    const t = a.t0 + (x - PAD.l) / g.pw * a.span;
+    if (t < a.t0 || t > a.t1) return null;
+    let lo = 0, hi = a.series.length - 1;
+    while (lo < hi - 1) { const mid = (lo + hi) >> 1; if (a.series[mid].t <= t) lo = mid; else hi = mid; }
+    const o = a.series[lo].o;
+    return { x: g.X(t), y: g.Y(o), html: '<b>' + num(o) + '</b> inside · ' + hm(t) + (cap ? ' · ' + Math.round(o / cap * 100) + '% of capacity' : '') };
+  });
+}
+
+function drawFlow(host, bs, a, unit) {
+  const g = plot(host, 190, g => {
+    g.X = t => PAD.l + (t - a.t0) / a.span * g.pw;
+    const max = Math.max(1, ...bs.map(b => Math.max(b.in, b.out)));
+    const mid = PAD.t + g.ph / 2, half = g.ph / 2 - 6;
+    const bw = Math.max(1.5, g.pw / bs.length - 2);
+    const step = niceStep(max / 2);
+    for (const v of [max, 0, -max]) {
+      const y = Math.round(mid - v / max * half) + 0.5;
+      g.push(line(PAD.l, y, PAD.l + g.pw, y, v === 0 ? 'zero' : 'gridline'));
+    }
+    g.push(text(PAD.l - 8, mid - half + 10, num(max), 'axis', 'end'));
+    g.push(text(PAD.l - 8, mid + half, num(max), 'axis', 'end'));
+    for (const b of bs) {
+      const x = g.X(b.t);
+      if (b.in) g.push('<rect x="' + x + '" y="' + (mid - b.in / max * half) + '" width="' + bw + '" height="' + Math.max(1, b.in / max * half - 1) + '" rx="2" fill="var(--in)"/>');
+      if (b.out) g.push('<rect x="' + x + '" y="' + (mid + 2) + '" width="' + bw + '" height="' + Math.max(1, b.out / max * half - 1) + '" rx="2" fill="var(--out)"/>');
+    }
+    xAxis(g, a.t0, a.t1);
+  });
+  hover(host, g, x => {
+    const i = Math.floor((x - PAD.l) / g.pw * bs.length);
+    const b = bs[i];
+    if (!b) return null;
+    return { x: g.X(b.t), y: PAD.t + 20, html: hm(b.t) + '–' + hm(b.t + unit) + ' · <b>' + b.in + '</b> in · <b>' + b.out + '</b> out' };
+  });
+}
+
+function drawVelocity(host, bs, a, unit) {
+  const rate = b => b.net / (unit / 3600000);
+  const g = plot(host, 180, g => {
+    g.X = t => PAD.l + (t - a.t0) / a.span * g.pw;
+    const vals = bs.map(rate);
+    const max = Math.max(10, ...vals.map(Math.abs));
+    yAxis(g, -max, max, v => (v > 0 ? '+' : '') + Math.round(v));
+    const pts = [];
+    bs.forEach((b, i) => { pts.push([g.X(b.t + unit / 2), g.Y(rate(b))]); });
+    const zero = g.Y(0);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x1, y1] = pts[i], [x2, y2] = pts[i + 1];
+      const up = (y1 + y2) / 2 < zero;
+      g.push('<path d="M' + x1 + ' ' + zero + 'L' + x1 + ' ' + y1 + 'L' + x2 + ' ' + y2 + 'L' + x2 + ' ' + zero + 'Z" fill="' +
+        (up ? 'var(--in)' : 'var(--out)') + '" opacity="0.16"/>');
+      g.push('<path d="M' + x1 + ' ' + y1 + 'L' + x2 + ' ' + y2 + '" stroke="' + (up ? 'var(--in)' : 'var(--out)') + '" stroke-width="2" fill="none"/>');
+    }
+    xAxis(g, a.t0, a.t1);
+  });
+  hover(host, g, x => {
+    const i = Math.floor((x - PAD.l) / g.pw * bs.length);
+    const b = bs[i];
+    if (!b) return null;
+    const r = Math.round(rate(b));
+    return { x: g.X(b.t + unit / 2), y: g.Y(rate(b)), html: hm(b.t) + ' · <b>' + (r > 0 ? '+' : '') + r + '</b> an hour ' + (r > 0 ? 'filling' : r < 0 ? 'emptying' : 'steady') };
+  });
+}
+
+function drawCumulative(host, a) {
+  const g = plot(host, 200, g => {
+    g.X = t => PAD.l + (t - a.t0) / a.span * g.pw;
+    yAxis(g, 0, Math.max(a.tin, a.tout) * 1.06 || 1);
+    const curve = (times, colour) => {
+      let d = 'M' + g.X(a.t0) + ' ' + g.Y(0);
+      times.forEach((t, i) => { d += 'L' + g.X(t) + ' ' + g.Y(i) + 'L' + g.X(t) + ' ' + g.Y(i + 1); });
+      d += 'L' + g.X(a.t1) + ' ' + g.Y(times.length);
+      g.push('<path d="' + d + '" fill="none" stroke="' + colour + '" stroke-width="2"/>');
+    };
+    curve(a.ins, 'var(--in)');
+    curve(a.outs, 'var(--out)');
+    g.push(text(PAD.l + g.pw, g.Y(a.tin) - 7, 'arrived ' + num(a.tin), 'mark', 'end'));
+    g.push(text(PAD.l + g.pw, g.Y(a.tout) + 15, 'left ' + num(a.tout), 'mark', 'end'));
+    xAxis(g, a.t0, a.t1);
+  });
+  const upto = (times, t) => { let lo = 0, hi = times.length; while (lo < hi) { const m = (lo + hi) >> 1; if (times[m] <= t) lo = m + 1; else hi = m; } return lo; };
+  hover(host, g, x => {
+    const t = a.t0 + (x - PAD.l) / g.pw * a.span;
+    if (t < a.t0 || t > a.t1) return null;
+    const i = upto(a.ins, t), o = upto(a.outs, t);
+    return { x: g.X(t), y: PAD.t + 18, html: hm(t) + ' · <b>' + num(i) + '</b> in · <b>' + num(o) + '</b> out · <b>' + num(i - o) + '</b> inside' };
+  });
+}
+
+function drawDwell(host, a) {
+  if (!a.stays.length) { host.innerHTML = '<p class="fignote" style="padding:16px">No completed stays in this log.</p>'; return; }
+  const maxStay = a.stays[a.stays.length - 1];
+  const bin = niceStep(maxStay / 18 / 60000) * 60000;
+  const n = Math.max(1, Math.ceil((maxStay + 1) / bin));
+  const bins = new Array(n).fill(0);
+  for (const s of a.stays) bins[Math.min(n - 1, Math.floor(s / bin))]++;
+  const g = plot(host, 180, g => {
+    g.X = i => PAD.l + i / n * g.pw;
+    yAxis(g, 0, Math.max(...bins) * 1.08 || 1);
+    const bw = Math.max(1.5, g.pw / n - 2);
+    bins.forEach((c, i) => {
+      if (!c) return;
+      g.push('<rect x="' + g.X(i) + '" y="' + g.Y(c) + '" width="' + bw + '" height="' + Math.max(1, g.Y(0) - g.Y(c)) + '" rx="2" fill="var(--accent)" opacity="0.85"/>');
+    });
+    const med = g.X(a.p50 / bin);
+    g.push(line(med, PAD.t, med, PAD.t + g.ph, '').replace('class=""', 'stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="4 3"'));
+    g.push(text(med + 6, PAD.t + 12, 'median ' + durShort(a.p50), 'mark', 'start'));
+    const ticks = Math.min(6, n);
+    for (let i = 0; i <= ticks; i++) {
+      const idx = Math.round(i / ticks * n);
+      g.push(text(g.X(idx), PAD.t + g.ph + 18, durShort(idx * bin), 'axis', i === 0 ? 'start' : i === ticks ? 'end' : 'middle'));
+    }
+  });
+  hover(host, g, x => {
+    const i = Math.floor((x - PAD.l) / g.pw * n);
+    if (i < 0 || i >= n || !bins[i]) return null;
+    return { x: g.X(i), y: g.Y(bins[i]), html: '<b>' + bins[i] + '</b> guests · ' + durShort(i * bin) + '–' + durShort((i + 1) * bin) };
+  });
+}
+
+/* ---------------- narrative ---------------- */
+
+function narrate(a, cap) {
+  const b = [];
+  const fill = a.peakAt - a.t0, drain = a.t1 - a.peakAt;
+  b.push('The door opened at ' + hm(a.t0) + ' and the last tap landed at ' + hm(a.t1) + ', ' +
+    durShort(a.span) + ' later. ' + num(a.tin) + ' guests came in and ' + num(a.tout) + ' left.');
+  b.push('The room was fullest at ' + hm(a.peakAt) + ' with ' + num(a.peak) + ' inside' +
+    (cap ? ', ' + Math.round(a.peak / cap * 100) + '% of the ' + num(cap) + ' you allow' : '') +
+    '. It took ' + durShort(fill) + ' to get there and ' + durShort(drain) + ' to clear out' +
+    (a.halfOut ? ', with half the peak gone by ' + hm(a.halfOut) : '') + '.');
+  if (a.fullMs > 0) b.push('It stayed within a fifth of that peak for ' + durShort(a.fullMs) +
+    ' — ' + Math.round(a.fullMs / a.span * 100) + '% of the night, ' + spanOf(a.fullFrom, a.fullTo) + '.');
+  if (a.surgeIn) b.push('Arrivals ran hardest ' + spanOf(a.surgeIn.from, a.surgeIn.to) + ' at about ' +
+    Math.round(a.surgeIn.rate) + ' an hour.');
+  if (a.stays.length) b.push('A guest stayed about ' + durShort(a.p50) + ' at the median, with a quarter staying past ' +
+    durShort(a.p75) + ' and one in ten past ' + durShort(a.p90) + '.');
+  if (a.turnover >= 1.35) b.push(num(a.tin) + ' guests passed through a room that held at most ' + num(a.peak) +
+    ', so the crowd turned over about ' + a.turnover.toFixed(1) + ' times.');
+  if (a.inside > 0) b.push(num(a.inside) + ' ' + (a.inside === 1 ? 'person was' : 'people were') +
+    ' still counted inside when counting stopped.');
+  else if (a.inside < 0) b.push('The log ends ' + num(-a.inside) + ' below zero, so more people left than were ever counted in.');
+  return b;
+}
+
+/* ---------------- render ---------------- */
+
+let A = null, CAP = 0, NAME = '', SAMPLE = false, ZONE_NOTE = '';
+
+const tile = (v, label, note, cls) =>
+  '<div class="tile' + (cls ? ' ' + cls : '') + '"><b>' + esc(v) + '</b><span>' + esc(label) + '</span>' +
+  (note ? '<i>' + esc(note) + '</i>' : '') + '</div>';
+
+function render() {
+  const a = A, unit = +$('#bucket').value;
+  const bs = buckets(EV, unit, a.t0, a.t1);
+
+  $('#headline').textContent = dayOf(a.t0) + ' · ' + spanOf(a.t0, a.t1);
+  $('#source').innerHTML = (SAMPLE ? '<span class="sample-chip">Sample night</span>' : '') +
+    (SAMPLE ? '<span>generated in this page — drop your own CSV over it</span>' : '<b>' + esc(NAME) + '</b>') +
+    '<span>' + num(EV.length) + ' taps</span>' +
+    (ZONE_NOTE ? '<span>' + esc(ZONE_NOTE) + '</span>' : '');
+
+  $('#tiles').innerHTML = [
+    tile(num(a.tin), 'guests in', 'half in by ' + hm(a.medianIn), 'in'),
+    tile(num(a.peak), 'peak inside', 'at ' + hm(a.peakAt)),
+    tile(durShort(a.span), 'door open', spanOf(a.t0, a.t1)),
+    tile(durShort(a.avgStay), 'average stay', 'time inside ÷ arrivals'),
+    tile(a.turnover.toFixed(1) + '×', 'turnover', num(a.tin) + ' through ' + num(a.peak) + ' places'),
+    tile(num(a.tout), 'guests out', a.inside ? num(Math.abs(a.inside)) + (a.inside > 0 ? ' left inside' : ' below zero') : 'room emptied', 'out'),
+  ].join('');
+
+  $('#narrative').innerHTML = narrate(a, CAP).map(p => '<p>' + esc(p) + '</p>').join('');
+
+  // phases
+  const fill = (a.fullFrom != null ? a.fullFrom : a.peakAt) - a.t0;
+  const held = a.fullFrom != null ? a.fullTo - a.fullFrom : 0;
+  const empty = Math.max(0, a.span - fill - held);
+  const seg = (ms, colour, op) => '<div style="flex:' + Math.max(0.001, ms) + ';background:' + colour + ';opacity:' + op + '"></div>';
+  $('#phasebar').innerHTML = seg(fill, 'var(--in)', .55) + seg(held, 'var(--accent)', .75) + seg(empty, 'var(--out)', .55);
+  $('#phasekey').innerHTML = [
+    ['var(--in)', 'Filling', durShort(fill) + ' · ' + spanOf(a.t0, a.t0 + fill)],
+    ['var(--accent)', 'Held near peak', a.fullMs ? durShort(a.fullMs) + ' · ' + spanOf(a.fullFrom, a.fullTo) : 'never settled'],
+    ['var(--out)', 'Emptying', durShort(empty) + ' · ' + spanOf(a.t1 - empty, a.t1)],
+  ].map(r => '<span><i class="swatch" style="background:' + r[0] + '"></i><b>' + r[1] + '</b> ' + esc(r[2]) + '</span>').join('');
+  $('#phasetiles').innerHTML = [
+    tile(durShort(a.peakAt - a.t0), 'time to peak', 'from first tap'),
+    tile(durShort(a.t1 - a.peakAt), 'time to clear', a.halfOut ? 'half gone by ' + hm(a.halfOut) : 'never half-emptied'),
+    tile(Math.round(a.avgOcc) + '', 'average inside', 'time-weighted across the night'),
+    tile(a.medianOut ? hm(a.medianOut) : '—', 'half out by', 'median departure'),
+  ].join('');
+
+  $('#occnote').textContent = 'Shaded band: within 20% of peak' + (CAP ? ' · dashed line: capacity' : '');
+  $('#caphint').textContent = CAP ? (a.peak > CAP ? 'Peak went ' + num(a.peak - CAP) + ' over capacity.' :
+    num(CAP - a.peak) + ' places spare at the fullest moment.') : '';
+
+  drawOccupancy($('#plotOcc'), a, CAP);
+  drawFlow($('#plotFlow'), bs, a, unit);
+  drawVelocity($('#plotVel'), bs, a, unit);
+  drawCumulative($('#plotCum'), a);
+
+  // dwell
+  $('#dwelltiles').innerHTML = [
+    tile(durShort(a.p50), 'median stay', 'half stayed longer'),
+    tile(durShort(a.p25) + ' – ' + durShort(a.p75), 'middle half', 'p25 to p75'),
+    tile(durShort(a.p90), 'long stayers', 'one in ten stayed past this'),
+    tile(num(a.stays.length), 'stays matched', a.inside > 0 ? num(a.inside) + ' never left' : 'every guest accounted for'),
+  ].join('');
+  $('#dwellnote').textContent = a.stays.length + ' matched stays, shortest ' + mmss(a.stays[0] || 0) + ', longest ' + durShort(a.stays[a.stays.length - 1] || 0);
+  drawDwell($('#plotDwell'), a);
+
+  // hour by hour
+  const hrs = hourRows(EV, a.t0, a.t1);
+  const maxIn = Math.max(1, ...hrs.map(h => h.in));
+  $('#hours').innerHTML = '<table><thead><tr><th>Hour</th><th>In</th><th>Out</th><th>Net</th><th>Peak</th><th>Inside at end</th><th>Share of arrivals</th></tr></thead><tbody>' +
+    hrs.map(h => '<tr><td class="word">' + esc(h.label) + '</td><td class="din">' + h.in + '</td><td class="dout">' + h.out +
+      '</td><td>' + (h.in - h.out > 0 ? '+' : '') + (h.in - h.out) + '</td><td>' + h.peak + '</td><td>' + h.end +
+      '</td><td><i class="bar" style="width:' + Math.round(h.in / maxIn * 100) + '%"></i></td></tr>').join('') +
+    '</tbody></table>';
+
+  // checks
+  const checks = [
+    [a.doubles === 0, a.doubles ? a.doubles + ' taps under 0.3 s apart' : 'No suspicious double taps',
+      a.doubles ? 'Same direction, a third of a second apart. Could be a bounced button or a genuine pair walking in together.' : 'Nothing in the log looks like an accidental double press.'],
+    [a.low >= 0, a.low < 0 ? 'Count went ' + num(-a.low) + ' below zero' : 'Count never went negative',
+      a.low < 0 ? 'Lowest at ' + hm(a.lowAt) + ', ' + durShort(a.negMs) + ' spent below zero. People already inside before counting started would do this.' : 'Every exit had someone inside to account for it.'],
+    [a.gap.ms < 1800000, 'Longest quiet spell ' + durShort(a.gap.ms),
+      'From ' + hm(a.gap.at) + '. Worth a look if the door was supposed to be busy then.'],
+    [a.inside === 0, a.inside ? num(Math.abs(a.inside)) + (a.inside > 0 ? ' still inside at the end' : ' unexplained exits') : 'Room balanced to zero',
+      a.inside > 0 ? 'Counting stopped before these guests left, or some exits were missed.' : a.inside < 0 ? 'More exits than arrivals overall.' : 'Arrivals and exits match exactly.'],
+  ];
+  $('#checks').innerHTML = checks.map(c => '<div class="check' + (c[0] ? '' : ' flag') + '"><i class="dot"></i><div><b>' +
+    esc(c[1]) + '</b><span>' + esc(c[2]) + '</span></div></div>').join('');
+
+  // tap log
+  const CAPROWS = 1000, rows = EV.slice(-CAPROWS);
+  let occ = 0; const occs = EV.map(e => (occ += e.d));
+  const from = EV.length - rows.length;
+  $('#logsummary').textContent = 'Every tap' + (EV.length > CAPROWS ? ' — showing the last ' + num(CAPROWS) + ' of ' + num(EV.length) : ' (' + num(EV.length) + ')');
+  $('#log').innerHTML = '<table><thead><tr><th>#</th><th>Time</th><th>Elapsed</th><th>Direction</th><th>Inside</th></tr></thead><tbody>' +
+    rows.map((e, i) => {
+      const k = from + i;
+      return '<tr><td>' + (k + 1) + '</td><td>' + esc(hm(e.t, true)) + '</td><td>' + esc(durShort(e.t - a.t0)) +
+        '</td><td class="' + (e.d > 0 ? 'din' : 'dout') + '">' + (e.d > 0 ? 'IN' : 'OUT') + '</td><td>' + occs[k] + '</td></tr>';
+    }).reverse().join('') + '</tbody></table>';
+
+  $('#foot').textContent = 'Read from ' + num(EV.length) + ' taps. The log counts bodies through a door: it never identifies anyone, ' +
+    'cannot tell a re-entry from a new guest, and ends with the last tap rather than when the room actually closed. ' +
+    'Stay lengths are estimates from pairing arrivals with exits in order.';
+
+  $('#report').hidden = false;
+}
+
+/* ---------------- loading ---------------- */
+
+function load(text, name, sample) {
+  try {
+    const read = readEvents(parseCsv(text));
+    EV = read.ev;
+    ZONE_NOTE = read.ownZone ? 'times shown in this device’s zone' : 'times as recorded at the door';
+    A = analyse(EV);
+    NAME = name;
+    SAMPLE = !!sample;
+    $('#error').hidden = true;
+    render();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch (err) {
+    $('#error').textContent = err.message || String(err);
+    $('#error').hidden = false;
+  }
+}
+
+function readFile(f) {
+  const r = new FileReader();
+  r.onload = () => load(String(r.result), f.name, false);
+  r.onerror = () => { $('#error').textContent = 'Could not read that file.'; $('#error').hidden = false; };
+  r.readAsText(f);
+}
+
+/* A plausible Saturday, generated here so the page opens showing what it does.
+   Clearly labelled as a sample, and replaced the moment a real CSV lands. */
+function sampleCsv() {
+  const start = new Date();
+  start.setHours(21, 0, 0, 0);
+  start.setDate(start.getDate() - ((start.getDay() + 1) % 7 || 7));   // last Saturday
+  const t0 = start.getTime(), off = -start.getTimezoneOffset();
+  const rows = [];
+  let rnd = 20260912;
+  const rand = () => (rnd = (rnd * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (let m = 0; m < 330; m++) {
+    const f = m / 330;
+    const arrivals = Math.round(9 * Math.max(0, Math.sin(Math.PI * Math.min(1, f * 1.45))) * (0.6 + rand() * 0.8));
+    const exits = f > 0.42 ? Math.round(11 * Math.sin(Math.PI * (f - 0.42) / 0.58) * (0.6 + rand() * 0.8)) : 0;
+    for (let k = 0; k < arrivals; k++) rows.push([t0 + m * 60000 + Math.floor(rand() * 55000), 1]);
+    for (let k = 0; k < exits; k++) rows.push([t0 + m * 60000 + Math.floor(rand() * 55000), -1]);
+  }
+  rows.sort((a, b) => a[0] - b[0]);
+  let occ = 0;
+  const out = ['seq,iso_timestamp,local_time,epoch_ms,elapsed_s,elapsed_hms,direction,delta,occupancy,cumulative_in,cumulative_out'];
+  let ci = 0, co = 0;
+  rows.forEach((r, i) => {
+    if (r[1] < 0 && occ <= 0) return;
+    occ += r[1]; r[1] > 0 ? ci++ : co++;
+    const d = new Date(r[0] + off * 60000);
+    const h = d.getUTCHours();
+    const local = d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate()) + ' ' +
+      (h % 12 || 12) + ':' + p2(d.getUTCMinutes()) + ':' + p2(d.getUTCSeconds()) + (h < 12 ? ' AM' : ' PM');
+    out.push([i + 1, new Date(r[0]).toISOString(), local, r[0], ((r[0] - t0) / 1000).toFixed(3), '', r[1] > 0 ? 'IN' : 'OUT', r[1], occ, ci, co].join(','));
+  });
+  return out.join('\r\n');
+}
+
+/* ---------------- wiring ---------------- */
+
+$('#pick').addEventListener('click', () => $('#file').click());
+$('#file').addEventListener('change', e => { if (e.target.files[0]) readFile(e.target.files[0]); });
+$('#sample').addEventListener('click', () => load(sampleCsv(), 'Sample night', true));
+$('#bucket').addEventListener('change', render);
+$('#capacity').addEventListener('input', e => { CAP = Math.max(0, +e.target.value || 0); render(); });
+
+let veil = null;
+document.addEventListener('dragover', e => {
+  e.preventDefault();
+  if (!veil) { veil = el('div', 'dropveil', 'Drop the CSV'); document.body.appendChild(veil); }
+});
+document.addEventListener('dragleave', e => { if (e.relatedTarget === null && veil) { veil.remove(); veil = null; } });
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  if (veil) { veil.remove(); veil = null; }
+  const f = e.dataTransfer.files[0];
+  if (f) readFile(f);
+});
+document.addEventListener('paste', e => {
+  const t = (e.clipboardData || window.clipboardData).getData('text');
+  if (t && t.includes(',') && t.split('\n').length > 3) load(t, 'Pasted CSV', false);
+});
+$('#copy').addEventListener('click', async () => {
+  const text = $('#headline').textContent + '\n\n' + narrate(A, CAP).join('\n\n');
+  try { await navigator.clipboard.writeText(text); $('#copy').textContent = 'Copied'; }
+  catch { const r = document.createRange(); r.selectNodeContents($('#narrative')); getSelection().removeAllRanges(); getSelection().addRange(r); $('#copy').textContent = 'Selected — press copy'; }
+  setTimeout(() => { $('#copy').textContent = 'Copy this read'; }, 2200);
+});
+
+let resizeT;
+window.addEventListener('resize', () => { if (!A) return; clearTimeout(resizeT); resizeT = setTimeout(render, 160); });
+
+load(sampleCsv(), 'Sample night', true);
+</script>
+</body>
+</html>

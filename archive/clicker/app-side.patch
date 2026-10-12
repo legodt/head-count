@@ -1,0 +1,252 @@
+--- a/app.js
++++ b/app.js
+@@ -213,22 +213,26 @@
+ 
+ /* ---------------- counting ---------------- */
+ 
+-function record(d, pad) {
++function record(d, pad, viaKey) {
+   const t = Date.now();
+   if (!S.startedAt) S.startedAt = t;
+   S.ev.push([t, d]);
+   save(); render(); refreshSheet(false);
+   if (pad) { pad.classList.add('hit'); setTimeout(() => pad.classList.remove('hit'), 90); }
+   if (navigator.vibrate) navigator.vibrate(d > 0 ? 14 : [10, 30, 10]);
++  if (viaKey) blip(d > 0 ? BLIP_IN : BLIP_OUT);   // a pad tap already flashes and vibrates
++  linkPush();
+   startTick();
+ }
+ 
+-function undo() {
+-  if (!S.ev.length) return;
++function undo(viaKey) {
++  if (!S.ev.length) { if (viaKey) blip(BLIP_NONE); return; }
+   const last = S.ev.pop();
+   if (!S.ev.length) S.startedAt = null;
+   save(true);                       // the backup must not outlive the removed tap
+   render(); refreshSheet(true);
++  if (viaKey) blip(BLIP_UNDO);
++  linkPush();
+   toast('Removed last ' + (last[1] > 0 ? 'IN' : 'OUT'));
+ }
+ 
+@@ -282,10 +286,157 @@
+ }
+ 
+ function startTick() {
++  holdWake();
+   if (tick || document.hidden) return;
+   tick = setInterval(paintHud, 1000);
+ }
+-function stopTick() { clearInterval(tick); tick = null; }
++function stopTick() { clearInterval(tick); tick = null; dropWake(); }
++
++/* ---------------- clicker ----------------
++   A two-button HID keyboard (see clicker/) sends the same arrows the desktop
++   keys do, so it needs no protocol and no pairing app. The link is one-way:
++   a press that arrives while the app is backgrounded or the screen has slept
++   is gone, unnoticed. Hence the wake lock, and hence the blip. */
++
++// Best-effort only - absent on iOS < 16.4 and on file:// in some browsers, and
++// the app must behave exactly as before wherever it is missing. The lock is
++// dropped by the browser on hide anyway; the release handler lets us re-take it.
++// This runs on every tap, so it must be cheap: one request in flight at a time,
++// and a refusal is remembered until the next foreground rather than re-asked
++// thousands of times across a night.
++let wake = null, wakePending = false, wakeDenied = false;
++function holdWake() {
++  if (wake || wakePending || wakeDenied || document.hidden || !navigator.wakeLock) return;
++  wakePending = true;
++  navigator.wakeLock.request('screen').then(w => {
++    wakePending = false; wake = w;
++    w.addEventListener('release', () => { wake = null; });
++  }).catch(() => { wakePending = false; wakeDenied = true; });
++}
++function dropWake() {
++  try { if (wake) wake.release(); } catch {}
++  wake = null; wakeDenied = false;          // worth asking again on the next foreground
++}
++
++// iOS keeps audio silent until a real gesture opens the context; the first pad
++// tap or key press does it, and starting an event is a screen interaction anyway.
++let ac = null;
++function unlockAudio() {
++  try {
++    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
++    if (ac.state === 'suspended') ac.resume();
++  } catch {}
++}
++// The only proof a clicker press landed: the motor in the hand says "pressed",
++// this says "counted". Four sounds, tellable apart in the dark without looking -
++// high in, low out, a falling pair for undo, and a floor tone for nothing to
++// undo. Every clicker key answers with one of them, so silence never means
++// anything but "not receiving".
++const BLIP_IN = [880], BLIP_OUT = [494], BLIP_UNDO = [740, 370], BLIP_NONE = [200];
++function blip(hz) {
++  unlockAudio();
++  if (!ac) return;
++  try {
++    hz.forEach((f, i) => {
++      const t = ac.currentTime + i * 0.1, o = ac.createOscillator(), g = ac.createGain();
++      o.frequency.value = f;
++      g.gain.setValueAtTime(0.0001, t);
++      g.gain.exponentialRampToValueAtTime(0.3, t + 0.008);
++      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
++      o.connect(g).connect(ac.destination);
++      o.start(t); o.stop(t + 0.1);
++    });
++  } catch {}
++}
++
++/* ---------------- clicker display ----------------
++   The clicker is dumb by design: it counts nothing and knows nothing. If it has
++   a screen, the host fills it, so the number on the door matches the number in
++   the app by construction rather than by two tallies agreeing.
++
++   Uplink stays HID and is untouched - keys must never depend on this working.
++   This is a separate, optional downlink over a custom GATT characteristic, and
++   everything here is wrapped: no Web Bluetooth (iOS, every Safari) means the
++   button never appears and the app behaves exactly as it did before.
++
++   Packet, little-endian, <= 107 bytes so it clears one default-MTU negotiation:
++     0     version (1)
++     1     flags, bit 0 = session live
++     2-3   occupancy   int16, signed - negative is legal here
++     4-5   peak        int16
++     6-7   lo          int16, what series value 0 means
++     8-9   hi          int16, what series value 255 means
++     10    n, series length
++     11..  series, n bytes, occupancy resampled to even time columns
++   The device scales the series to its own panel, so a bigger screen needs no
++   protocol change. */
++
++const LINK_SVC = '48ea0001-6b75-4b1b-9c3b-1a2c4d5e6f70';
++const LINK_CHR = '48ea0002-6b75-4b1b-9c3b-1a2c4d5e6f70';
++const LINK_COLS = 96;
++
++let link = null, linkTick = null;
++
++// Occupancy resampled onto LINK_COLS even time columns. Step semantics, like the
++// chart: occupancy holds flat between taps, so each column takes the running
++// value as at its right-hand edge.
++function linkSeries(s) {
++  const out = new Array(LINK_COLS).fill(0);
++  if (!s.ev.length) return { series: out, lo: 0, hi: 0 };
++  const t0 = s.startedAt || s.ev[0][0], t1 = Math.max(s.endedAt || Date.now(), t0 + 1);
++  const occ = [];
++  let run = 0, j = 0;
++  for (let c = 0; c < LINK_COLS; c++) {
++    const edge = t0 + (t1 - t0) * (c + 1) / LINK_COLS;
++    while (j < s.ev.length && s.ev[j][0] <= edge) run += s.ev[j++][1];
++    occ.push(run);
++  }
++  const lo = Math.min(0, ...occ), hi = Math.max(...occ);
++  const span = hi - lo || 1;
++  return { series: occ.map(v => Math.round((v - lo) / span * 255)), lo, hi };
++}
++
++function linkPacket(s) {
++  const { series, lo, hi } = linkSeries(s);
++  const buf = new ArrayBuffer(11 + series.length), dv = new DataView(buf);
++  dv.setUint8(0, 1);
++  dv.setUint8(1, s.endedAt ? 0 : 1);
++  dv.setInt16(2, fold(s).occ, true);
++  dv.setInt16(4, fold(s).peak, true);
++  dv.setInt16(6, lo, true);
++  dv.setInt16(8, hi, true);
++  dv.setUint8(10, series.length);
++  series.forEach((v, i) => dv.setUint8(11 + i, v));
++  return buf;
++}
++
++async function linkPush() {
++  if (!link) return;
++  try { await link.writeValueWithoutResponse(linkPacket(S)); }
++  catch { linkDrop(); }                 // out of range, or the user turned it off
++}
++
++function linkDrop() {
++  clearInterval(linkTick); linkTick = null; link = null;
++  const b = $('btnLink');
++  if (b) { b.textContent = 'Clicker'; b.classList.remove('on'); }
++}
++
++// Must be called from a real gesture - Web Bluetooth refuses otherwise.
++async function linkConnect() {
++  if (link) { linkDrop(); toast('Clicker display disconnected'); return; }
++  try {
++    const dev = await navigator.bluetooth.requestDevice({ filters: [{ services: [LINK_SVC] }] });
++    dev.addEventListener('gattserverdisconnected', linkDrop);
++    const gatt = await dev.gatt.connect();
++    link = await (await gatt.getPrimaryService(LINK_SVC)).getCharacteristic(LINK_CHR);
++    const b = $('btnLink');
++    if (b) { b.textContent = 'Clicker ✓'; b.classList.add('on'); }
++    linkPush();
++    linkTick = setInterval(() => { if (!document.hidden) linkPush(); }, 1000);
++    toast('Clicker display connected');
++  } catch { link = null; }              // cancelled the picker, or it was not there
++}
+ 
+ /* ---------------- data sheet ---------------- */
+ 
+@@ -617,12 +768,13 @@
+ // pointerdown, not click: the tap must count the instant the finger lands.
+ const padHandler = delta => e => {
+   if (e.pointerType === 'mouse' && e.button !== 0) return;
++  unlockAudio();                // a real gesture, so the clicker can be heard later
+   record(delta, e.currentTarget);
+ };
+ on('padIn', 'pointerdown', padHandler(1));
+ on('padOut', 'pointerdown', padHandler(-1));
+ 
+-on('btnUndo', 'click', undo);
++on('btnUndo', 'click', () => undo());   // not `undo` - the event would read as a clicker press
+ on('btnData', 'click', () => { viewing = null; openSheet(); });
+ on('sheetClose', 'click', closeSheet);
+ 
+@@ -642,6 +794,9 @@
+ on('btnCopy', 'click', () => copyCsv(cur()));
+ on('btnShare', 'click', () => shareCsv(cur()));
+ if ($('btnShare')) $('btnShare').hidden = !canShareFiles;
++
++on('btnLink', 'click', linkConnect);
++if ($('btnLink')) $('btnLink').hidden = !navigator.bluetooth;
+ 
+ on('btnEvents', 'click', openEvents);
+ on('eventsClose', 'click', closeEvents);
+@@ -653,9 +808,9 @@
+   else if (d.del != null) deleteEvent(+d.del);
+ });
+ 
+-// Desktop testing. `repeat` is dropped so a held key cannot become forty
+-// guests, and the default is cancelled so an arrow never scrolls the sheet out
+-// from under the count.
++// The clicker and desktop testing share this path. `repeat` is dropped so a
++// held or stuck button cannot become forty guests, and the default is cancelled
++// so an arrow never scrolls the sheet out from under the count.
+ document.addEventListener('keydown', e => {
+   if ($('dlgEnd') && $('dlgEnd').open) return;
+   const el = document.activeElement;
+@@ -663,10 +818,10 @@
+   const d = (e.key === 'ArrowUp' || e.key === 'i') ? 1 : (e.key === 'ArrowDown' || e.key === 'o') ? -1 : 0;
+   if (d) {
+     e.preventDefault();
+-    if (!e.repeat) record(d, $(d > 0 ? 'padIn' : 'padOut'));
++    if (!e.repeat) record(d, $(d > 0 ? 'padIn' : 'padOut'), true);
+   } else if (e.key === 'Backspace' || e.key === 'u') {
+     e.preventDefault();             // Backspace still means "back" in some browsers
+-    if (!e.repeat) undo();
++    if (!e.repeat) undo(true);
+   } else if (e.key === 'Escape') {
+     if (!$('sheet').hidden) closeSheet();
+     else if ($('events') && !$('events').hidden) closeEvents();
+--- a/index.html
++++ b/index.html
+@@ -50,6 +50,7 @@
+   <button id="btnUndo" class="mini">Undo</button>
+   <button id="btnData" class="mini">Data</button>
+   <button id="btnEvents" class="mini">Events</button>
++  <button id="btnLink" class="mini" hidden>Clicker</button>
+   <button id="btnEnd" class="mini danger">End event</button>
+ </footer>
+ 

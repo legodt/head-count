@@ -33,6 +33,12 @@ body{
 .occ{font-size:clamp(44px,15vw,72px);font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
 .occ.neg{color:var(--warn)}
 .occlbl{color:var(--dim);font-size:14px;letter-spacing:.12em;text-transform:uppercase}
+/* always on, while an event is running: how fast the room is moving */
+.vel{font-size:15px;font-weight:600;color:var(--dim);margin-top:4px;
+  font-variant-numeric:tabular-nums;letter-spacing:.01em}
+.vel.up{color:#4ad991}
+.vel.down{color:#ff8b83}
+.vel[hidden]{display:none}
 .meta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;color:var(--dim);font-size:13px;margin-top:4px}
 .meta b{color:var(--ink);font-variant-numeric:tabular-nums}
 .meta.time{margin-top:2px}
@@ -159,3 +165,6 @@ body{
 
 @media (min-aspect-ratio:1/1){ .pads{flex-direction:row} }
 @media (prefers-reduced-motion:reduce){ .pad{transition:none} }
+
+/* clicker display linked */
+.mini.on { border-color: #29b36b; color: #6fe3a5; }

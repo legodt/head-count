@@ -69,6 +69,14 @@ so the same source runs unmodified in both.
   the finger lands. Each tap flashes the pad and vibrates.
 - HUD: count; in / out / peak; the **device's current time** and, once the
   first tap starts the session, its elapsed length.
+- **Velocity** is on screen the whole time an event is running, under the
+  count: `▲ 24/hr filling`, `▼ 18/hr emptying`, or holding steady inside
+  ±2/hr. `velocity()` is the one definition, shared with the narrative so the
+  two can never disagree: net flow over the tail window (`span/8`, clamped
+  10–30 min) divided by the time actually elapsed, **floored at 5 minutes** —
+  without that floor a flurry in the first seconds reads as 200,000 an hour.
+  It scans back from the last tap, so it costs the taps in the window, not the
+  night.
 - **Naming.** Until named, the title at the top is a dashed pill with a pencil
   — a call to action; once named, plain text with a faint pencil. Tap to name.
   The data sheet head has **Rename** for whichever event it shows, live or
@@ -115,8 +123,8 @@ arrivals** and **peak exits** (busiest sliding window, normalised to per-hour,
 window = `span/6` clamped to 5–60 min), **avg stay** (area under the occupancy
 curve ÷ arrivals — Little's law, the only honest dwell time available from
 anonymous counts), **half in by** (median arrival). `turnover` = arrivals ÷
-peak, reported in the narrative when ≥ 1.35×. Live sessions get a current
-fill/empty rate over the tail window; ended ones get anyone left inside.
+peak, reported in the narrative when ≥ 1.35×. Live sessions get the same
+`velocity()` the HUD shows; ended ones get anyone left inside.
 
 Deliberately **not** shown: "inside now", "total in", "total out" — the running
 count is already the biggest thing on the main screen, and the totals are in
@@ -139,6 +147,36 @@ delta, occupancy, cumulative_in, cumulative_out`. UTF-8 BOM so Excel opens it
 clean. `local_time` is device time, `2026-09-12 9:05:03 PM`; `iso_timestamp` is
 UTC. Always the complete log; only the on-screen table is capped at 300.
 
+## Door Read (`tools/analyze.html`)
+A separate single-file page for reading an exported CSV after the night, far
+past what the phone shows: headline tiles, a written read, occupancy / flow /
+velocity / cumulative charts, phases split on 80% of peak, hour rows, a dwell
+estimate, and checks on the log itself. No
+dependencies but a web font; the file is parsed in the page and never uploaded.
+
+- Times are shown **as they were at the door**: `local_time` minus `epoch_ms`
+  recovers the event's UTC offset per row, so a reader in another zone — or a
+  clock change mid-event — still sees the door's own clock.
+- Reads this app's columns by name, and other files by sniffing a timestamp
+  column and an IN/OUT or ±1 column.
+- Dwell pairs each exit with the earliest guest still inside: right on average,
+  wrong for any individual, and labelled as such on the page.
+- The CSV carries no end time, so the night ends at the last tap.
+- **No group or door-pressure claims.** How tightly taps bunch is set by train
+  arrivals and how fast the queue is cleared, not by who came with whom, so
+  group size, average group and busiest-minute were cut rather than left to be
+  read as facts about guests.
+- Not in `build.py`'s `SHIPPED`, so it cannot reach `docs/`. Published as an
+  artifact (same file, document wrapper stripped): <https://claude.ai/artifact/6JfXd6T6oty1apb4NQoXps>.
+
+## Shelved
+`archive/clicker/` holds the hardware clicker, shelved 2026-10-11: firmware,
+its spec, its two test suites, and `app-side.patch`, which re-applies the app's
+half of it (keys answering with tones, a screen wake lock, and the Bluetooth
+display downlink). Nothing under `archive/` is built, tested or shipped, and
+nothing in the app refers to it. Active work is this app and
+`tools/analyze.html`.
+
 ## Constraints
 - Must work with no network for the entire session.
 - localStorage is ~5 MB; a tap costs ~18 bytes, so ~250k taps fit.
@@ -156,9 +194,11 @@ python tests/durability.py                   # file:// survival, needs playwrigh
 python tests/archive.py                      # events archive integrity, needs playwright
 python tests/update.py                       # deploy/update safety, needs playwright
 python tests/overnight.py                    # time zones, midnight, DST, needs playwright
+python tests/analyze.py                      # Door Read CSV analyser, needs playwright
 ```
 `durability.py`, `archive.py` and `overnight.py` drive `dist/head-count.html`;
-`update.py` serves temporary copies of `docs/`. Run `python build.py` first.
+`analyze.py` drives `tools/analyze.html`; `update.py` serves temporary copies
+of `docs/`. Run `python build.py` first.
 `tests/durability.py` taps, then reloads, closes and reopens the tab, copies
 the file elsewhere, and relaunches the browser on the same profile — asserting
 the count survives all five.
@@ -181,3 +221,10 @@ database and reads the charts through a canvas spy: the HUD clock in four
 zones; a 9 PM–3 AM event and both daylight-saving directions (axis, line, peak
 marker and flow buckets across midnight; tiles, narrative, card, table, CSV);
 and a live session with the device clock run through 12:00 AM.
+
+`tests/analyze.py` builds a night in Python, exports it as a Head Count CSV and
+opens Door Read on it from a browser in another time zone: the headline numbers
+must match the Python, the peak must read in the door's clock and not the
+reader's, every section, chart, hour row, check and log row must render, hover
+and the capacity line must work, and neither theme nor a 390px phone may scroll
+sideways.

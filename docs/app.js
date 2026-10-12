@@ -121,6 +121,20 @@ function busiest(ts, win) {
   return { n: best, from: at, to: at + win, rate: best / (win / 3600000) };
 }
 
+// Net flow over the recent tail, in people per hour: the number always on the
+// main screen and the one in the narrative are the same measurement. Scans back
+// from the last tap, so a 250k-tap log costs only the taps inside the window.
+function velocity(s, now) {
+  if (!s.startedAt) return 0;
+  const t1 = now || endOf(s), span = Math.max(1, t1 - s.startedAt);
+  const win = Math.min(1800000, Math.max(600000, Math.round(span / 8)));
+  let net = 0;
+  for (let i = s.ev.length - 1; i >= 0 && s.ev[i][0] >= t1 - win; i--) net += s.ev[i][1];
+  // Measured over what has actually happened, but never over less than five
+  // minutes: a flurry in the first seconds of an event is not 200,000 an hour.
+  return net / (Math.min(win, Math.max(span, 300000)) / 3600000);
+}
+
 function analyze(s) {
   const f = fold(s);
   const t0 = s.startedAt, t1 = endOf(s), span = Math.max(1, t1 - t0);
@@ -137,9 +151,6 @@ function analyze(s) {
   // Surge window scales with the event: a 20-minute session should not be
   // measured against an hour-long window.
   const win = Math.min(3600000, Math.max(300000, Math.round(span / 6)));
-  const tailWin = Math.min(1800000, Math.max(600000, Math.round(span / 8)));
-  let net = 0;
-  for (const [t, d] of s.ev) if (t >= t1 - tailWin) net += d;
 
   return Object.assign(f, {
     span, area,
@@ -147,7 +158,7 @@ function analyze(s) {
     surgeIn: busiest(ins, win),
     surgeOut: busiest(outs, win),
     medianIn: f.tin ? ins[Math.ceil(f.tin / 2) - 1] : null,
-    trend: net / (tailWin / 3600000),
+    trend: velocity(s, t1),
     turnover: f.peak ? f.tin / f.peak : 0,
   });
 }
@@ -253,18 +264,26 @@ function render() {
   $('label').classList.toggle('unnamed', !S.label);
   $('btnUndo').disabled = !f.n;
   $('btnEnd').disabled = !f.n;
-  paintClock();
+  paintHud();
 }
-// The clock is the device's own time; the session's running length sits beside it.
-function paintClock() {
+// Everything that moves on its own: the device's clock, the session's running
+// length, and how fast the room is filling or emptying right now.
+function paintHud() {
   $('clock').textContent = hm(Date.now());
   const el = $('elapsed');
   if (el) { el.hidden = !S.startedAt; el.textContent = hms(durOf(S)) + ' elapsed'; }
+  const v = $('vel');
+  if (v) {
+    const r = velocity(S), n = Math.round(Math.abs(r)), up = r >= 2, down = r <= -2;
+    v.hidden = !S.startedAt;
+    v.textContent = up ? '▲ ' + n + '/hr filling' : down ? '▼ ' + n + '/hr emptying' : '— holding steady';
+    v.className = 'vel' + (up ? ' up' : down ? ' down' : '');
+  }
 }
 
 function startTick() {
   if (tick || document.hidden) return;
-  tick = setInterval(paintClock, 1000);
+  tick = setInterval(paintHud, 1000);
 }
 function stopTick() { clearInterval(tick); tick = null; }
 
@@ -634,11 +653,21 @@ on('evlist', 'click', e => {
   else if (d.del != null) deleteEvent(+d.del);
 });
 
-document.addEventListener('keydown', e => {           // desktop testing
-  if ($('dlgEnd').open) return;
-  if (e.key === 'ArrowUp' || e.key === 'i') record(1, $('padIn'));
-  else if (e.key === 'ArrowDown' || e.key === 'o') record(-1, $('padOut'));
-  else if (e.key === 'Escape') {
+// Desktop testing. `repeat` is dropped so a held key cannot become forty
+// guests, and the default is cancelled so an arrow never scrolls the sheet out
+// from under the count.
+document.addEventListener('keydown', e => {
+  if ($('dlgEnd') && $('dlgEnd').open) return;
+  const el = document.activeElement;
+  if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+  const d = (e.key === 'ArrowUp' || e.key === 'i') ? 1 : (e.key === 'ArrowDown' || e.key === 'o') ? -1 : 0;
+  if (d) {
+    e.preventDefault();
+    if (!e.repeat) record(d, $(d > 0 ? 'padIn' : 'padOut'));
+  } else if (e.key === 'Backspace' || e.key === 'u') {
+    e.preventDefault();             // Backspace still means "back" in some browsers
+    if (!e.repeat) undo();
+  } else if (e.key === 'Escape') {
     if (!$('sheet').hidden) closeSheet();
     else if ($('events') && !$('events').hidden) closeEvents();
   }
