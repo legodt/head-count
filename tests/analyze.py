@@ -57,7 +57,6 @@ span_min = round((t1 - t0) / 60000)
 expect = {
     "guests in": f"{tin:,}",
     "peak inside": f"{peak:,}",
-    "door open": f"{span_min // 60}h {span_min % 60}m" if span_min % 60 else f"{span_min // 60}h",
     "turnover": f"{tin / peak:.1f}×",
 }
 peak_hm = dt.datetime.fromtimestamp(peak_at / 1000, TZ)
@@ -103,7 +102,7 @@ with sync_playwright() as pw:
     pg.wait_for_function("document.getElementById('source').textContent.includes('known-night')", timeout=5000)
     figs = pg.eval_on_selector_all("#strip .fig", "ns => ns.map(n => [n.querySelector('span').textContent, n.querySelector('b').textContent, n.querySelector('i') ? n.querySelector('i').textContent : ''])")
     got = {label: value for label, value, _ in figs}
-    check("five figures, no more", len(figs) == 5, [f[0] for f in figs])
+    check("four figures, no more", len(figs) == 4, [f[0] for f in figs])
     for k, v in expect.items():
         check(f"figure {k} = {v}", got.get(k) == v, got.get(k))
     peak_note = next(n for l, v, n in figs if l == "peak inside")
@@ -120,14 +119,16 @@ with sync_playwright() as pw:
     })""")
     check("three sections: summary, charts, trust",
           layout["sections"] == ["summary", "charts", "trust"], layout["sections"])
-    check("three charts, in order: how full, the door, how long",
-          layout["plots"] == ["plotOcc", "plotFlow", "plotDwell"] and layout["svgs"] == 3, layout["plots"])
+    check("two charts: how full, and the door that filled it",
+          layout["plots"] == ["plotOcc", "plotFlow"] and layout["svgs"] == 2, layout["plots"])
     check("hour rows and the tap log are present but folded away",
           layout["hours"] >= 6 and layout["log"] > 100 and layout["folded"], layout)
     check("four check chips", layout["chips"] == 4, layout["chips"])
 
     read = pg.inner_text("#narrative")
     check("the read is three sentences at most", read.count(".") <= 3, read)
+    bolded = pg.eval_on_selector_all("#narrative b", "ns => ns.map(n => n.textContent)")
+    check("its figures are bolded for skimming", len(bolded) >= 5, bolded)
     check("no group or door-pressure claims", "group" not in pg.inner_text("main").lower(),
           "bunching is set by trains and queue clearance, not by who came together")
 

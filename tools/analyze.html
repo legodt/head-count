@@ -83,9 +83,11 @@ body.dragging .drop{border-color:var(--accent);color:var(--accent)}
 .fig i{display:block;font-style:normal;color:var(--ink2);font-size:12px;margin-top:3px}
 .fig.in b{color:var(--in)}
 
-.read{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;
-  margin-top:10px;color:var(--ink2);font-size:14px;line-height:1.5}
-.read p{max-width:84ch}
+.read{display:flex;gap:18px;align-items:flex-start;justify-content:space-between;margin-top:14px}
+.read p{max-width:70ch;color:var(--ink2);font-size:16.5px;line-height:1.62;letter-spacing:.004em;
+  text-wrap:pretty}
+.read b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;
+  white-space:nowrap;letter-spacing:0}
 
 /* ---------- controls ---------- */
 .controls{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:18px;color:var(--ink2);font-size:13px}
@@ -113,7 +115,7 @@ input[type="number"]{width:88px}
 .tip b{font-family:var(--mono);font-weight:500}
 .axis{font:400 11px var(--mono);fill:var(--ink3)}
 .mark{fill:var(--ink);font:500 11.5px var(--body)}
-.band{font:500 10px var(--display);letter-spacing:.14em;text-transform:uppercase;fill:var(--ink3)}
+.band{font:600 10.5px var(--display);letter-spacing:.15em;text-transform:uppercase;fill:var(--ink)}
 .gridline{stroke:var(--grid);stroke-width:1}
 .zero{stroke:var(--ink3);stroke-width:1;opacity:.5}
 
@@ -214,13 +216,6 @@ td.word{font-family:var(--body);font-size:13px}
       <div class="plot" id="plotFlow"></div>
     </div>
 
-    <div class="panel">
-      <div class="panelhead">
-        <span class="figtitle">How long people stayed</span>
-        <span class="legend" id="dwellnote"></span>
-      </div>
-      <div class="plot" id="plotDwell"></div>
-    </div>
   </section>
 
   <section id="trust">
@@ -368,7 +363,6 @@ function durShort(ms) {
   const h = Math.floor(m / 60), r = m % 60;
   return r ? h + 'h ' + r + 'm' : h + 'h';
 }
-const shortDur = ms => ms < 60000 ? Math.round(ms / 1000) + 's' : durShort(ms);
 const num = n => n.toLocaleString();
 
 /* ---------------- analysis ---------------- */
@@ -566,8 +560,10 @@ function drawNight(host, a, cap) {
     for (const [from, to, colour, label] of bands) {
       const x = g.X(from), w = g.X(to) - x;
       if (w <= 0) continue;
-      g.push('<rect x="' + x + '" y="' + PAD.t + '" width="' + w + '" height="' + g.ph + '" fill="' + colour + '" opacity="0.07"/>');
-      if (w > 108) g.push(text(x + w / 2, PAD.t + 11, label, 'band', 'middle'));
+      g.push('<rect x="' + x + '" y="' + PAD.t + '" width="' + w + '" height="' + g.ph + '" fill="' + colour + '" opacity="0.18"/>');
+      g.push('<line x1="' + x + '" y1="' + PAD.t + '" x2="' + x + '" y2="' + (PAD.t + g.ph) +
+        '" stroke="' + colour + '" stroke-width="1" opacity="0.45"/>');
+      if (w > 108) g.push(text(x + w / 2, PAD.t + 12, label, 'band', 'middle'));
     }
 
     let d = 'M' + g.X(a.t0) + ' ' + g.Y(0), py = g.Y(0);
@@ -628,71 +624,24 @@ function drawFlow(host, bs, a, unit) {
   });
 }
 
-// How long people stayed, with the quartiles marked rather than tiled out.
-function drawDwell(host, a) {
-  if (!a.stays.length) { host.innerHTML = '<p class="hint" style="padding:12px">No completed stays in this log.</p>'; return; }
-  const minStay = a.stays[0], maxStay = a.stays[a.stays.length - 1];
-  const bin = Math.max(60000, niceStep((maxStay - minStay) / 22 / 60000) * 60000);
-  // start where the data starts: a tight distribution should not be squeezed
-  // into the right-hand third by empty bins no guest ever landed in
-  const lo = Math.floor(minStay / bin) * bin;
-  const n = Math.max(1, Math.ceil((maxStay - lo + 1) / bin));
-  const bins = new Array(n).fill(0);
-  for (const s of a.stays) bins[Math.min(n - 1, Math.max(0, Math.floor((s - lo) / bin)))]++;
-
-  const g = plot(host, 136, g => {
-    g.X = v => PAD.l + (v - lo) / (n * bin) * g.pw;
-    yAxis(g, 0, Math.max(...bins) * 1.12 || 1);
-    const bw = Math.max(1.5, g.pw / n - 2);
-    bins.forEach((c, i) => {
-      if (c) g.push('<rect x="' + g.X(lo + i * bin) + '" y="' + g.Y(c) + '" width="' + bw + '" height="' +
-        Math.max(1, g.Y(0) - g.Y(c)) + '" rx="2" fill="var(--accent)" opacity="0.8"/>');
-    });
-
-    // median always labelled; the quartiles only where they will not collide
-    let lastLabel = -1e9;
-    for (const [q, label, strong] of [[a.p25, 'p25', false], [a.p50, 'median ' + durShort(a.p50), true],
-                                      [a.p75, 'p75', false], [a.p90, 'p90 ' + durShort(a.p90), false]]) {
-      const x = g.X(q);
-      g.push('<line x1="' + x + '" y1="' + PAD.t + '" x2="' + x + '" y2="' + (PAD.t + g.ph) +
-        '" stroke="var(--ink)" stroke-width="1" stroke-dasharray="3 3" opacity="' + (strong ? 0.75 : 0.3) + '"/>');
-      const room = x - lastLabel > label.length * 6.4 + 14 && x < PAD.l + g.pw - label.length * 6.4;
-      if (strong || room) {
-        g.push(text(x + 5, PAD.t + (strong ? 11 : 23), label, strong ? 'mark' : 'band', 'start'));
-        lastLabel = x;
-      }
-    }
-
-    // ticks on round durations rather than on bin boundaries
-    const step = [60000, 300000, 900000, 1800000, 3600000, 7200000, 14400000]
-      .find(u => (n * bin) / u <= 6) || 14400000;
-    for (let v = Math.ceil(lo / step) * step; v <= lo + n * bin; v += step) {
-      const x = g.X(v);
-      g.push(text(x, PAD.t + g.ph + 15, durShort(v), 'axis',
-        x < PAD.l + 20 ? 'start' : x > PAD.l + g.pw - 20 ? 'end' : 'middle'));
-    }
-  });
-  hover(host, g, x => {
-    const i = Math.floor((x - PAD.l) / g.pw * n);
-    if (i < 0 || i >= n || !bins[i]) return null;
-    return { x: g.X(lo + i * bin), y: g.Y(bins[i]),
-      html: '<b>' + bins[i] + '</b> guests · ' + durShort(lo + i * bin) + '–' + durShort(lo + (i + 1) * bin) };
-  });
-}
 
 /* ---------------- read ---------------- */
 
 // Two or three sentences, and only what the charts cannot say at a glance.
+// Every figure is bolded, so the sentence can be skimmed for its numbers and
+// read properly only if you want the shape around them.
 function narrate(a, cap) {
-  const b = [];
-  b.push('Doors ran ' + spanOf(a.t0, a.t1) + ' and ' + num(a.tin) + ' guests came through, fullest at ' +
-    hm(a.peakAt) + ' with ' + num(a.peak) + ' inside' + (cap ? ', ' + Math.round(a.peak / cap * 100) + '% of the ' + num(cap) + ' you allow' : '') + '.');
-  if (a.fullMs > 0) b.push('It held within a fifth of that peak for ' + durShort(a.fullMs) + ', ' +
-    Math.round(a.fullMs / a.span * 100) + '% of the night, then took ' + durShort(a.t1 - a.peakAt) + ' to clear' +
-    (a.halfOut ? ', half of it gone by ' + hm(a.halfOut) : '') + '.');
-  if (a.stays.length) b.push('A guest stayed about ' + durShort(a.p50) + ', one in ten past ' + durShort(a.p90) +
-    (a.turnover >= 1.35 ? ', and the room turned over ' + a.turnover.toFixed(1) + ' times' : '') + '.');
-  return b.join(' ');
+  const n = v => '<b>' + v + '</b>';
+  const s = [];
+  s.push('Doors ran ' + n(spanOf(a.t0, a.t1)) + ' and ' + n(num(a.tin)) + ' guests came through, fullest at ' +
+    n(hm(a.peakAt)) + ' with ' + n(num(a.peak)) + ' inside' +
+    (cap ? ', ' + n(Math.round(a.peak / cap * 100) + '%') + ' of the ' + num(cap) + ' you allow' : '') + '.');
+  if (a.fullMs > 0) s.push('It held within a fifth of that peak for ' + n(durShort(a.fullMs)) + ', ' +
+    n(Math.round(a.fullMs / a.span * 100) + '%') + ' of the night, then took ' + n(durShort(a.t1 - a.peakAt)) + ' to clear' +
+    (a.halfOut ? ', half of it gone by ' + n(hm(a.halfOut)) : '') + '.');
+  if (a.stays.length) s.push('A guest stayed about ' + n(durShort(a.p50)) + ', one in ten past ' + n(durShort(a.p90)) +
+    (a.turnover >= 1.35 ? ', and the room turned over ' + n(a.turnover.toFixed(1) + '×') : '') + '.');
+  return s.join(' ');
 }
 
 /* ---------------- render ---------------- */
@@ -714,21 +663,17 @@ function render() {
   $('strip').innerHTML = [
     fig(num(a.tin), 'guests in', 'half in by ' + hm(a.medianIn), 'in'),
     fig(num(a.peak), 'peak inside', 'at ' + hm(a.peakAt)),
-    fig(durShort(a.span), 'door open', spanOf(a.t0, a.t1)),
     fig(durShort(a.avgStay), 'average stay', 'time inside ÷ arrivals'),
     fig(a.turnover.toFixed(1) + '×', 'turnover', num(a.tin) + ' through ' + num(a.peak) + ' places'),
   ].join('');
 
-  $('narrative').textContent = narrate(a, CAP);
+  $('narrative').innerHTML = narrate(a, CAP);
   $('caphint').textContent = CAP
     ? (a.peak > CAP ? 'Peak went ' + num(a.peak - CAP) + ' over.' : num(CAP - a.peak) + ' spare at the fullest moment.')
     : 'Set a capacity to see headroom.';
 
   drawNight($('plotOcc'), a, CAP);
   drawFlow($('plotFlow'), bs, a, unit);
-  $('dwellnote').textContent = num(a.stays.length) + ' matched stays · shortest ' + shortDur(a.stays[0] || 0) +
-    ' · longest ' + durShort(a.stays[a.stays.length - 1] || 0);
-  drawDwell($('plotDwell'), a);
 
   const checks = [
     [a.doubles === 0, a.doubles ? a.doubles + ' taps under 0.3 s apart' : 'No double taps', a.doubles ? 'same direction' : ''],
@@ -846,7 +791,7 @@ document.addEventListener('paste', e => {
   if (t && t.includes(',') && t.split('\n').length > 3) load(t, 'Pasted CSV', false);
 });
 $('copy').addEventListener('click', async () => {
-  const text = $('headline').textContent + '\n' + narrate(A, CAP);
+  const text = $('headline').textContent + '\n' + $('narrative').textContent;
   try { await navigator.clipboard.writeText(text); $('copy').textContent = 'Copied'; }
   catch {
     const r = document.createRange();

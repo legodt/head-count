@@ -12,8 +12,8 @@ never need a network, never need an account. One person, one thumb, in the dark.
 ## Two pieces
 The counter (this repo's app, on a phone at the door) and **Door Read**
 (`tools/analyze.html`), a separate page you drop an exported CSV into after the
-night: five figures, a short read, and three charts — how full, the door that
-filled it, how long people stayed — with hour rows and the tap log folded away. Published at
+night: four figures, a short read with its numbers bolded, and two charts — how
+full, and the door that filled it — with hour rows and the tap log folded away. Published at
 https://claude.ai/artifact/6JfXd6T6oty1apb4NQoXps and parses the file in the browser.
 
 ## Where it lives
