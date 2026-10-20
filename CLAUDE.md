@@ -180,7 +180,18 @@ needed. The page went from roughly 4,300px of scroll to around 1,000.
   redraws when that column's width changes, so a tab that lays out late is
   caught too. `tests/analyze.py` compares each chart's drawn width against its
   shown width on the first paint.
-- Capacity defaults to **115**, the room this is for. Turnover is told in the
+- Capacity defaults to **115**, the room this is for.
+- The sample night is a **real log**: Last Saturday Dance, 26 Sep 2026, 363
+  taps over 13 hours. It is stored as hex millisecond gaps (2 KB, not the 40 KB
+  the CSV costs) and rebuilt into the app's own export format, so the sample
+  arrives through exactly the parser a dropped file meets.
+  `tests/fixtures/last-saturday-dance.csv` is the original, and the test
+  asserts the rebuild is tap-for-tap identical.
+- Buckets default to **30 minutes**. The time axis marks **every local hour**
+  with a gridline through both charts and labels as many of them as fit —
+  hourly on a laptop, every second or third hour on a phone — with midnight
+  drawn stronger. A trivial dip below zero (a night that opens with an OUT)
+  keeps the y floor at 0 rather than buying a whole negative step. Turnover is told in the
   read rather than given a figure of its own: it is a ratio of two numbers the
   same sentence already states.
 - **No group or door-pressure claims.** How tightly taps bunch is set by train
@@ -249,5 +260,6 @@ match the Python, the peak must read in the door's clock and not the reader's,
 there must be exactly two charts in order and three sections, hour rows and the
 tap log must be present but folded, the read must stay within three sentences,
 bold its figures, speak of the average guest and carry the turnover, capacity
-must start at 115, hover and capacity must work, the page may make no group claim, and
+must start at 115, buckets at 30 minutes, the embedded sample must rebuild the
+fixture exactly, every time label must sit on the hour, hover and capacity must work, the page may make no group claim, and
 neither theme nor a 390px phone may scroll sideways.

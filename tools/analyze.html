@@ -193,9 +193,9 @@ td.word{font-family:var(--body);font-size:13px}
       <label>Bucket
         <select id="bucket">
           <option value="300000">5 min</option>
-          <option value="600000" selected>10 min</option>
+          <option value="600000">10 min</option>
           <option value="900000">15 min</option>
-          <option value="1800000">30 min</option>
+          <option value="1800000" selected>30 min</option>
           <option value="3600000">1 hour</option>
         </select>
       </label>
@@ -358,6 +358,7 @@ const MO = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct'
 function dayOf(t) { const d = parts(t); return WD[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + MO[d.getUTCMonth()] + ' ' + d.getUTCFullYear(); }
 function spanOf(a, b) { const x = hm(a), y = hm(b); return x.slice(-2) === y.slice(-2) ? x.slice(0, -3) + '–' + y : x + '–' + y; }
 function durShort(ms) {
+  if (ms < 60000) return Math.max(1, Math.round(ms / 1000)) + ' s';
   const m = Math.round(ms / 60000);
   if (m < 60) return m + ' min';
   const h = Math.floor(m / 60), r = m % 60;
@@ -493,11 +494,46 @@ function yAxis(g, min, max, fmt) {
   }
   return { top, bot };
 }
-function xAxis(g, t0, t1, y) {
-  for (const t of timeTicks(t0, t1, Math.max(2, Math.floor(g.pw / 84)))) {
-    const x = g.X(t);
-    g.push(text(x, y, hm(t), 'axis', x < PAD.l + 24 ? 'start' : x > PAD.l + g.pw - 24 ? 'end' : 'middle'));
+// Every local hour boundary in range, each one re-derived rather than stepped
+// by 3,600,000 ms, so a clock change cannot slide the whole axis by an hour.
+function hourMarks(t0, t1) {
+  const out = [];
+  let t = t0;
+  for (let i = 0; i < 400; i++) {
+    const off = offAt(t) * 60000;
+    t = (Math.floor((t + off) / 3600000) + 1) * 3600000 - off;
+    if (t > t1) break;
+    out.push(t);
   }
+  return out;
+}
+// Hours where they exist, fewer-but-rounder times for a session too short to
+// have three of them.
+function axisTicks(t0, t1, pw) {
+  const hrs = hourMarks(t0, t1);
+  return hrs.length >= 3 ? hrs : timeTicks(t0, t1, Math.max(2, Math.floor(pw / 84)));
+}
+const atMidnight = t => parts(t).getUTCHours() === 0;
+
+// The same hour lines through both charts, so a bar and the curve above it are
+// read against one hour without counting across the plot. Midnight is stronger.
+function vgrid(g, ticks, top, bottom) {
+  for (const t of ticks) {
+    const x = Math.round(g.X(t)) + 0.5;
+    g.push('<line x1="' + x + '" y1="' + top + '" x2="' + x + '" y2="' + bottom +
+      '" stroke="var(--ink3)" stroke-width="1" opacity="' + (atMidnight(t) ? 0.45 : 0.18) + '"/>');
+  }
+}
+
+function xAxis(g, y, ticks) {
+  const every = [1, 2, 3, 4, 6, 12].find(k => g.pw / Math.ceil(ticks.length / k) >= 68) || 12;
+  ticks.forEach((t, i) => {
+    if (i % every) return;
+    const x = g.X(t);
+    g.push('<line x1="' + x + '" y1="' + (y - 14) + '" x2="' + x + '" y2="' + (y - 9) +
+      '" stroke="var(--ink3)" stroke-width="1.5" opacity="' + (atMidnight(t) ? 0.9 : 0.6) + '"/>');
+    g.push(text(x, y, hm(t), 'axis', x < PAD.l + 22 ? 'start' : x > PAD.l + g.pw - 22 ? 'end' : 'middle'));
+  });
 }
 
 function hover(host, g, hit) {
@@ -534,7 +570,9 @@ function hover(host, g, hit) {
 function drawNight(host, a, cap) {
   const g = plot(host, 220, g => {
     g.X = t => PAD.l + (t - a.t0) / a.span * g.pw;
-    yAxis(g, Math.min(0, a.low), Math.max(a.peak, cap || 0) * 1.1 || 1);
+    // a trivial dip below zero (a door opened with an OUT) keeps the floor at 0
+    // rather than buying a whole negative gridline step for one person
+    yAxis(g, a.low < -0.05 * Math.max(1, a.peak) ? a.low : 0, Math.max(a.peak, cap || 0) * 1.1 || 1);
 
     const bands = [];
     if (a.fullFrom != null) {
@@ -542,6 +580,7 @@ function drawNight(host, a, cap) {
       bands.push([a.fullFrom, a.fullTo, 'var(--accent)', 'near peak ' + durShort(a.fullMs)]);
       bands.push([a.fullTo, a.t1, 'var(--out)', 'emptying ' + durShort(a.t1 - a.fullTo)]);
     }
+    vgrid(g, axisTicks(a.t0, a.t1, g.pw), PAD.t, PAD.t + g.ph);
     for (const [from, to, colour, label] of bands) {
       const x = g.X(from), w = g.X(to) - x;
       if (w <= 0) continue;
@@ -565,7 +604,8 @@ function drawNight(host, a, cap) {
     }
     const px = g.X(a.peakAt), pyk = g.Y(a.peak), flip = px > PAD.l + g.pw - 92;
     g.push('<circle cx="' + px + '" cy="' + pyk + '" r="4" fill="var(--in)" stroke="var(--panel)" stroke-width="2"/>');
-    g.push(text(px + (flip ? -8 : 8), pyk - 8, num(a.peak) + ' at ' + hm(a.peakAt), 'mark', flip ? 'end' : 'start'));
+    g.push(text(px + (flip ? -8 : 8), pyk < PAD.t + 32 ? pyk + 17 : pyk - 8,
+      num(a.peak) + ' at ' + hm(a.peakAt), 'mark', flip ? 'end' : 'start'));
   });
   hover(host, g, x => {
     const t = a.t0 + (x - PAD.l) / g.pw * a.span;
@@ -586,6 +626,7 @@ function drawFlow(host, bs, a, unit) {
     const mid = PAD.t + (g.ph - 18) / 2, half = (g.ph - 18) / 2 - 2;
     const bw = Math.max(1.5, g.pw / bs.length - 2);
     g.Y = v => mid - v / max * half;
+    vgrid(g, axisTicks(a.t0, a.t1, g.pw), PAD.t, PAD.t + g.ph - 18);
     g.push(hline(g, Math.round(mid) + 0.5, 'zero'));
     g.push(text(PAD.l - 7, mid - half + 9, '+' + num(max), 'axis', 'end'));
     g.push(text(PAD.l - 7, mid + half, '−' + num(max), 'axis', 'end'));
@@ -597,7 +638,7 @@ function drawFlow(host, bs, a, unit) {
     }
     const pts = bs.map(b => [g.X(b.t) + bw / 2, g.Y(b.net)]);
     g.push('<path d="M' + pts.map(p => p[0] + ' ' + p[1]).join('L') + '" fill="none" stroke="var(--ink2)" stroke-width="1.5" opacity="0.85"/>');
-    xAxis(g, a.t0, a.t1, PAD.t + g.ph);
+    xAxis(g, PAD.t + g.ph, axisTicks(a.t0, a.t1, g.pw));
   });
   hover(host, g, x => {
     const b = bs[Math.floor((x - PAD.l) / g.pw * bs.length)];
@@ -645,8 +686,8 @@ function render() {
   const bs = buckets(EV, unit, a.t0, a.t1);
 
   $('headline').textContent = dayOf(a.t0) + ' · ' + spanOf(a.t0, a.t1);
-  $('source').innerHTML = (SAMPLE ? '<span class="sample-chip">Sample night</span>' : '<span>' + esc(NAME) + '</span>') +
-    '<span>' + num(EV.length) + ' taps</span><span>' + esc(ZONE_NOTE) + '</span>';
+  $('source').innerHTML = (SAMPLE ? '<span class="sample-chip">Sample night</span>' : '') +
+    '<span>' + esc(NAME) + '</span><span>' + num(EV.length) + ' taps</span><span>' + esc(ZONE_NOTE) + '</span>';
 
   $('strip').innerHTML = [
     fig(num(a.tin), 'guests in', 'half in by ' + hm(a.medianIn), 'in'),
@@ -736,33 +777,26 @@ function readFile(f) {
   r.readAsText(f);
 }
 
-/* A plausible Saturday, generated here so the page opens showing what it does.
-   Labelled as a sample, and replaced the moment a real CSV lands. */
+/* Last Saturday Dance, 26 September 2026: a real night, kept as hex millisecond
+   gaps rather than 40 KB of CSV, and rebuilt into the app's own export format so
+   the sample arrives through exactly the parser a dropped file meets. */
+const SAMPLE_NAME = 'Last Saturday Dance';
+const SAMPLE_T0 = 1790467681070, SAMPLE_OFF = -240;
+const SAMPLE_TAPS = '0o,588i,1211i,2bado,b6o,3b9i,55bi,4a4o,3169i,118i,177ebi,35co,842bi,69c44i,a80o,5fae5o,2062ci,159i,18ei,b0ci,144i,137i,14ai,3ba3bi,c445di,54a4i,b37c7i,177i,1eei,9fb5i,114i,12di,1bdi,5516di,d7i,20b98i,4abci,120i,d5a2ei,54ci,1e3i,1b8i,18di,180i,4b1b1i,35604i,13ai,216i,67di,33d7i,222i,201i,43414i,12036i,5fe1i,1aabai,1f2i,9a55ci,13fi,1a1i,19fi,1b8i,3399ai,1c7i,1f7i,19c8o,5dbci,20ai,10ffci,296i,1e0d4i,537cbi,1c53bi,1a9i,4afabi,23496i,d7dai,1c7i,3a3eei,728di,a0b4ei,168i,2a5di,1afi,5eabo,bco,bc41ei,102i,148i,33fdi,2e1aai,efi,d149i,11ci,1dfabi,177i,255e1i,8ei,1f830i,588o,4ad69i,15ei,16cfi,1d967i,fbaci,e594i,151i,1924ai,14di,126i,179i,93b0i,16ei,d479i,2b937i,e9i,5042i,198f5i,c0i,40bai,6a77i,759ddi,26524i,1c7i,12b70i,8462i,1e27di,1b13fi,16f97i,34f9ai,150i,12ei,cacei,4a1edi,2fa7di,102i,dcc3i,1d575i,3985o,6f766i,24a2ao,36168i,575i,788i,2b3d8i,1837di,fci,2bf9ai,10di,f7i,42fbco,1cf43o,1368bi,acd4o,68f2o,227o,2aco,1bfo,29fb9o,eci,1b27ai,112i,27fo,526fi,aedei,160i,5993o,b6o,42a04o,1c0o,75917o,309i,3e404i,57a21i,eci,2d4f1i,d644o,1a8o,1480ai,10di,4e388i,841c2o,163o,f4o,39ae5i,e2i,5986o,1f3b6o,16ff5o,c47eo,efo,6924i,19ci,334b5o,1aao,194o,2b05ei,a570i,5993i,e43o,29bcdi,138i,232i,6ec24i,478eo,141ao,1e0o,74b5ao,4ed03i,cb3a1o,170eo,df51o,1b9o,342o,64bb3o,766o,5036eo,325o,318a0i,1a2i,810o,19890o,cbo,139e9o,43f07o,2d621i,2b9i,19fi,12021o,2c0o,91f5o,61a6o,c3896o,14bcai,2d9i,88070o,1c6o,13724eo,a802ci,6a4do,3662do,1b4o,28fo,15e8o,b1455o,14eo,6a0o,e7359i,3f9i,11cai,119i,4fe4bo,2a800o,50f82o,f3o,37ecdo,eb5o,436o,c8o,16co,104o,309o,aff12o,b75o,cao,1cc0o,98o,205o,3d1edi,f4i,f3i,109i,113i,d8eeo,e2o,fbo,3921o,18a7o,112o,130o,1b93o,f2o,dbo,d3o,e9o,b7o,14dbo,17eo,c1o,e5o,edo,b9o,148fo,2d5bo,f5o,109o,11bo,dco,109o,f1o,10co,1c5o,61417o,134o,42f09i,120i,6ac38o,1e1o,bfdo,509b5o,10056o,176o,f307o,1b3o,19ao,3d23o,d8f5o,114o,918a0i,65068o,117o,3b774i,acc12o,b27e6o,400o,9fd0bo,142aeo,2b942o,1a1o,2c5d8o,18do,1eco,1cco,1c4o,4a0bo,1a4o,7f688o,b28bdi,4f394o,9c792o,32ao,1810d6o,e485co,78ed4i,1aeff9o,1e26di,ab2cco,eco,1c838bo,106ec3o,106o,35525o,5bf6o,1bfo,17co,1a70ao,1a2o,a9b5o,f7cai,2be86o,199o,225e6o,243o';
+
 function sampleCsv() {
-  const start = new Date();
-  start.setHours(21, 0, 0, 0);
-  start.setDate(start.getDate() - ((start.getDay() + 1) % 7 || 7));   // last Saturday
-  const t0 = start.getTime(), off = -start.getTimezoneOffset();
-  const rows = [];
-  let rnd = 20260912;
-  const rand = () => (rnd = (rnd * 1103515245 + 12345) % 2147483648) / 2147483648;
-  for (let m = 0; m < 330; m++) {
-    const f = m / 330;
-    const arrivals = Math.round(9 * Math.max(0, Math.sin(Math.PI * Math.min(1, f * 1.45))) * (0.6 + rand() * 0.8));
-    const exits = f > 0.42 ? Math.round(11 * Math.sin(Math.PI * (f - 0.42) / 0.58) * (0.6 + rand() * 0.8)) : 0;
-    for (let k = 0; k < arrivals; k++) rows.push([t0 + m * 60000 + Math.floor(rand() * 55000), 1]);
-    for (let k = 0; k < exits; k++) rows.push([t0 + m * 60000 + Math.floor(rand() * 55000), -1]);
-  }
-  rows.sort((a, b) => a[0] - b[0]);
   const out = ['seq,iso_timestamp,local_time,epoch_ms,elapsed_s,elapsed_hms,direction,delta,occupancy,cumulative_in,cumulative_out'];
-  let occ = 0, ci = 0, co = 0;
-  rows.forEach((r, i) => {
-    if (r[1] < 0 && occ <= 0) return;
-    occ += r[1]; r[1] > 0 ? ci++ : co++;
-    const d = new Date(r[0] + off * 60000), h = d.getUTCHours();
-    const local = d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate()) + ' ' +
-      (h % 12 || 12) + ':' + p2(d.getUTCMinutes()) + ':' + p2(d.getUTCSeconds()) + (h < 12 ? ' AM' : ' PM');
-    out.push([i + 1, new Date(r[0]).toISOString(), local, r[0], ((r[0] - t0) / 1000).toFixed(3), '', r[1] > 0 ? 'IN' : 'OUT', r[1], occ, ci, co].join(','));
+  let t = SAMPLE_T0, occ = 0, ci = 0, co = 0;
+  SAMPLE_TAPS.split(',').forEach((tok, i) => {
+    t += parseInt(tok.slice(0, -1) || '0', 16);
+    const d = tok.slice(-1) === 'i' ? 1 : -1;
+    occ += d; d > 0 ? ci++ : co++;
+    const w = new Date(t + SAMPLE_OFF * 60000), h = w.getUTCHours(), el = Math.floor((t - SAMPLE_T0) / 1000);
+    const local = w.getUTCFullYear() + '-' + p2(w.getUTCMonth() + 1) + '-' + p2(w.getUTCDate()) + ' ' +
+      (h % 12 || 12) + ':' + p2(w.getUTCMinutes()) + ':' + p2(w.getUTCSeconds()) + (h < 12 ? ' AM' : ' PM');
+    out.push([i + 1, new Date(t).toISOString(), local, t, ((t - SAMPLE_T0) / 1000).toFixed(3),
+      p2(Math.floor(el / 3600)) + ':' + p2(Math.floor(el / 60) % 60) + ':' + p2(el % 60),
+      d > 0 ? 'IN' : 'OUT', d, occ, ci, co].join(','));
   });
   return out.join('\r\n');
 }
@@ -771,7 +805,7 @@ function sampleCsv() {
 
 $('pick').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', e => { if (e.target.files[0]) readFile(e.target.files[0]); });
-$('sample').addEventListener('click', () => load(sampleCsv(), 'Sample night', true));
+$('sample').addEventListener('click', () => load(sampleCsv(), SAMPLE_NAME, true));
 $('bucket').addEventListener('change', render);
 $('capacity').addEventListener('input', e => { CAP = Math.max(0, +e.target.value || 0); render(); });
 
@@ -805,7 +839,7 @@ $('copy').addEventListener('click', async () => {
 
 window.addEventListener('resize', () => { if (!A) return; clearTimeout(resizeT); resizeT = setTimeout(render, 160); });
 
-load(sampleCsv(), 'Sample night', true);
+load(sampleCsv(), SAMPLE_NAME, true);
 </script>
 </body>
 </html>

@@ -10,6 +10,7 @@ render, that hover and the capacity input work, that the page makes no group or
 door-pressure claims, and that neither theme nor a 390px phone scrolls
 sideways. Needs playwright. Exits non-zero on any failure.
 """
+import csv
 import datetime as dt
 import pathlib
 import re
@@ -21,6 +22,7 @@ from playwright.sync_api import sync_playwright
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PAGE = (ROOT / "tools" / "analyze.html").as_uri()
 CSV = pathlib.Path(tempfile.gettempdir()) / "hc-known-night.csv"
+FIXTURE = ROOT / "tests" / "fixtures" / "last-saturday-dance.csv"
 
 # ---- a night with answers known here -------------------------------------
 TZ = dt.timezone(dt.timedelta(hours=10))                     # fixed offset, no DST
@@ -103,6 +105,18 @@ with sync_playwright() as pw:
                                    return { drawn: +s.getAttribute('width'), shown: Math.round(r.width) }; }""")
     check("charts are drawn at the width they are shown at, on the first paint",
           abs(paint["drawn"] - paint["shown"]) <= 2, paint)
+
+    # the sample is a real night kept as hex deltas: it must rebuild exactly
+    real = sorted((int(r["epoch_ms"]), 1 if r["direction"] == "IN" else -1)
+                  for r in csv.DictReader(FIXTURE.read_text(encoding="utf-8-sig").splitlines()))
+    got = [tuple(x) for x in pg.evaluate("() => EV.map(e => [e.t, e.d])")]
+    check(f"the sample rebuilds the real night exactly ({len(real)} taps)", got == real,
+          f"{len(got)} taps, first difference at " + str(next((i for i, (a, b) in enumerate(zip(got, real)) if a != b), "none")))
+    check("bucket defaults to 30 minutes", pg.input_value("#bucket") == "1800000", pg.input_value("#bucket"))
+    labels = pg.evaluate(r"""() => [...document.querySelectorAll('#plotFlow text')]
+      .map(n => n.textContent).filter(s => /^\d{1,2}:\d{2} [AP]M$/.test(s))""")
+    check("every time label sits on the hour",
+          len(labels) >= 4 and all(l[-6:-3] == ":00" for l in labels), labels)
 
     pg.set_input_files("#file", str(CSV))
     pg.wait_for_function("document.getElementById('source').textContent.includes('known-night')", timeout=5000)
