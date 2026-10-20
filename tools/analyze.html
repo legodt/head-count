@@ -108,9 +108,10 @@ input[type="number"]{width:88px}
 .swatch{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
 .swatch.line{height:2px;border-radius:0}
 .plot{position:relative}
-.plot svg{display:block;width:100%;height:auto;overflow:visible}
+.plot svg{display:block;width:100%;height:auto;overflow:hidden}
 .tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);border-radius:8px;
   padding:6px 9px;font:500 12px/1.4 var(--body);white-space:nowrap;z-index:4;
+  max-width:calc(100% - 8px);overflow:hidden;text-overflow:ellipsis;
   box-shadow:0 6px 18px rgba(0,0,0,.22);transform:translate(-50%,-115%)}
 .tip b{font-family:var(--mono);font-weight:500}
 .axis{font:400 11px var(--mono);fill:var(--ink3)}
@@ -553,8 +554,10 @@ function hover(host, g, hit) {
     if (!found) { tip.hidden = true; cross.style.display = 'none'; return; }
     tip.innerHTML = found.html;
     tip.hidden = false;
-    tip.style.left = Math.max(66, Math.min(r.width - 66, found.x * (r.width / g.w))) + 'px';
-    tip.style.top = (found.y != null ? found.y * (r.height / g.h) : 34) + 'px';
+    const tw = tip.offsetWidth, th = tip.offsetHeight;          // measured, not guessed
+    const px = found.x * (r.width / g.w), py = found.y != null ? found.y * (r.height / g.h) : 34;
+    tip.style.left = Math.max(tw / 2 + 2, Math.min(r.width - tw / 2 - 2, px)) + 'px';
+    tip.style.top = Math.max(th * 1.2 + 2, py) + 'px';          // the transform lifts it 115%
     cross.setAttribute('x1', found.x); cross.setAttribute('x2', found.x);
     cross.style.display = '';
   };
@@ -630,12 +633,13 @@ function drawFlow(host, bs, a, unit) {
     g.push(text(PAD.l - 7, mid - half + 9, '+' + num(max), 'axis', 'end'));
     g.push(text(PAD.l - 7, mid + half, '−' + num(max), 'axis', 'end'));
 
+    const right = PAD.l + g.pw;
     for (const b of bs) {
-      const x = g.X(b.t);
-      if (b.in) g.push('<rect x="' + x + '" y="' + g.Y(b.in) + '" width="' + bw + '" height="' + Math.max(1, mid - g.Y(b.in) - 1) + '" rx="2" fill="var(--in)"/>');
-      if (b.out) g.push('<rect x="' + x + '" y="' + (mid + 2) + '" width="' + bw + '" height="' + Math.max(1, mid - g.Y(b.out) - 1) + '" rx="2" fill="var(--out)"/>');
+      const x = g.X(b.t), w = Math.max(1, Math.min(bw, right - x));   // the last bucket is a part-bucket
+      if (b.in) g.push('<rect x="' + x + '" y="' + g.Y(b.in) + '" width="' + w + '" height="' + Math.max(1, mid - g.Y(b.in) - 1) + '" rx="2" fill="var(--in)"/>');
+      if (b.out) g.push('<rect x="' + x + '" y="' + (mid + 2) + '" width="' + w + '" height="' + Math.max(1, mid - g.Y(b.out) - 1) + '" rx="2" fill="var(--out)"/>');
     }
-    const pts = bs.map(b => [g.X(b.t) + bw / 2, g.Y(b.net)]);
+    const pts = bs.map(b => [Math.min(g.X(b.t) + bw / 2, right), g.Y(b.net)]);
     g.push('<path d="M' + pts.map(p => p[0] + ' ' + p[1]).join('L') + '" fill="none" stroke="var(--ink2)" stroke-width="1.5" opacity="0.85"/>');
     xAxis(g, PAD.t + g.ph, axisTicks(a.t0, a.t1, g.pw));
   });

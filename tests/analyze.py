@@ -177,6 +177,29 @@ with sync_playwright() as pw:
 
     check("no horizontal scroll at 1180px", pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
 
+    # A tooltip that left its chart widened the page, which raised a scrollbar,
+    # which resized the layout, which redrew the chart and took the tooltip
+    # away: the page shook. Nothing may reach past its own chart.
+    rest = pg.evaluate("document.documentElement.scrollWidth")
+    widest, outside = rest, 0
+    for sel in ("#plotOcc", "#plotFlow"):
+        box = pg.evaluate("() => { const e = document.querySelector('%s').getBoundingClientRect();"
+                          " return [e.x, e.y, e.width, e.height]; }" % sel)
+        for frac in (0.5, 0.9, 0.97, 0.995, 0.999, 0.02):
+            pg.mouse.move(box[0] + box[2] * frac, box[1] + box[3] / 2)
+            pg.wait_for_timeout(40)
+            widest = max(widest, pg.evaluate("document.documentElement.scrollWidth"))
+            outside = max(outside, pg.evaluate("""() => { const t = document.querySelector('%s .tip');
+                if (!t || t.hidden) return 0;
+                const a = t.getBoundingClientRect(), p = t.parentElement.getBoundingClientRect();
+                return Math.round(Math.max(0, a.right - p.right, p.left - a.left, p.top - a.top)); }""" % sel))
+    check("hovering anywhere never widens the page", widest <= rest, f"{widest} while hovering, {rest} at rest")
+    check("the tooltip stays inside its own chart", outside == 0, f"{outside}px outside")
+    spill = pg.evaluate("""() => [...document.querySelectorAll('.plot svg')].map(s => {
+        const vb = s.viewBox.baseVal, bb = s.getBBox();
+        return Math.round(Math.max(0, bb.x + bb.width - vb.width, -bb.x)); })""")
+    check("nothing is drawn outside its chart box", max(spill) == 0, spill)
+
     pg.emulate_media(color_scheme="dark")
     pg.set_viewport_size({"width": 390, "height": 900})
     pg.wait_for_timeout(400)

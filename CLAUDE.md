@@ -174,6 +174,14 @@ needed. The page went from roughly 4,300px of scroll to around 1,000.
 - The CSV carries no end time, so the night ends at the last tap. **Guests
   still counted inside at the end are therefore normal, not a fault** — the
   counter is stopped before the room empties — so nothing flags it.
+- **Nothing may be drawn outside its own chart.** A tooltip that left the plot
+  widened the page, which raised a horizontal scrollbar, which resized the
+  layout, which fired the `ResizeObserver`, which redrew the chart and took the
+  tooltip away — so the page shook as the pointer moved. The tooltip is now
+  clamped by its *measured* width and height, the flow chart's last (partial)
+  bucket has its bar clipped to the plot edge, and `.plot svg` carries
+  `overflow: hidden` as a backstop. `tests/analyze.py` sweeps the pointer to
+  each chart's far edge and fails if the page widens by a pixel.
 - `render()` unhides the report **before** it draws. A hidden host measures
   0 wide, so every chart took its 300px floor and CSS stretched it to full
   width — giant text, two axis ticks. A `ResizeObserver` on the first plot
