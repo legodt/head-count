@@ -181,9 +181,10 @@ needed. The page went from roughly 4,300px of scroll to around 1,000.
   caught too. `tests/analyze.py` compares each chart's drawn width against its
   shown width on the first paint.
 - The read prefers the plain word to the exact one where they compete: *stayed
-  above 99* over *within a fifth of peak*, *filled 1.5 times over* over
-  *turnover 1.5×*, guests over your limit rather than a percentage of it. One
-  idea per sentence, nothing over 150 characters.
+  above 99* over *within a fifth of peak*. It says nothing about the capacity
+  limit — that moves from event to event, and the dashed line on the chart and
+  the hint beside the control carry it. One idea per sentence, nothing over
+  150 characters.
 - Capacity defaults to **115**, the room this is for.
 - The sample night is a **real log**: Last Saturday Dance, 26 Sep 2026, 363
   taps over 13 hours. It is stored as hex millisecond gaps (2 KB, not the 40 KB
@@ -263,7 +264,7 @@ opens Door Read on it from a browser in another time zone: the five figures must
 match the Python, the peak must read in the door's clock and not the reader's,
 there must be exactly two charts in order and three sections, hour rows and the
 tap log must be present but folded, the read must stay within three sentences,
-bold its figures, hold its sentences short, speak of the average guest and
-carry the turnover in words, capacity must start at 115, buckets at 30 minutes, the embedded sample must rebuild the
+bold its figures, hold its sentences short, speak of the average guest, carry
+the turnover and never the capacity limit, capacity must start at 115, buckets at 30 minutes, the embedded sample must rebuild the
 fixture exactly, every time label must sit on the hour, hover and capacity must work, the page may make no group claim, and
 neither theme nor a 390px phone may scroll sideways.

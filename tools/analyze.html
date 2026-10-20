@@ -655,18 +655,16 @@ function drawFlow(host, bs, a, unit) {
 // Short sentences, one idea each, every figure bolded so the paragraph can be
 // skimmed for numbers first and read for the shape second. Plain words over
 // exact ones where the two compete: "stayed above 99" rather than "within a
-// fifth of peak", "filled 1.5 times over" rather than "turnover 1.5x".
-function narrate(a, cap) {
+// fifth of peak".
+function narrate(a) {
   const n = v => '<b>' + v + '</b>';
   const s = [];
 
   s.push('The door was open ' + n(spanOf(a.t0, a.t1)) + ', and ' + n(num(a.tin)) + ' guests came in.');
 
-  let full = 'The room was fullest at ' + n(hm(a.peakAt)) + ' with ' + n(num(a.peak)) + ' inside';
-  if (cap && a.peak > cap) full += ', ' + n(num(a.peak - cap)) + ' over your limit of ' + num(cap);
-  else if (cap && a.peak === cap) full += ', exactly your limit';
-  else if (cap) full += ', ' + n(num(cap - a.peak)) + ' under your limit of ' + num(cap);
-  s.push(full + '.');
+  // Nothing about the capacity limit: it moves from event to event, while the
+  // dashed line on the chart and the hint by the control carry it already.
+  s.push('The room was fullest at ' + n(hm(a.peakAt)) + ' with ' + n(num(a.peak)) + ' inside.');
 
   const shape = [];
   if (a.fullMs > 0) shape.push('It stayed above ' + n(num(Math.round(a.peak * 0.8))) + ' for ' +
@@ -674,12 +672,10 @@ function narrate(a, cap) {
   if (a.halfOut) shape.push((shape.length ? 'and was ' : 'It was ') + 'half empty again by ' + n(hm(a.halfOut)));
   if (shape.length) s.push(shape.join(', ') + '.');
 
-  const over = a.turnover >= 1.15
-    ? 'the room filled about ' + n(a.turnover.toFixed(1)) + ' times over'
-    : 'that was about one roomful all night';
+  const over = 'the room turned over ' + n(a.turnover.toFixed(1) + '×');
   if (a.stays.length) s.push('The average guest stayed about ' + n(durShort(a.p50)) +
     ', one in ten stayed past ' + n(durShort(a.p90)) + ', and ' + over + '.');
-  else if (a.tin) s.push(over.charAt(0).toUpperCase() + over.slice(1) + '.');
+  else if (a.tin) s.push('The ' + over.slice(4) + '.');
 
   return s.join(' ');
 }
@@ -707,7 +703,7 @@ function render() {
     fig(durShort(a.avgStay), 'average stay', 'time inside ÷ arrivals'),
   ].join('');
 
-  $('narrative').innerHTML = narrate(a, CAP);
+  $('narrative').innerHTML = narrate(a);
   $('caphint').textContent = CAP
     ? (a.peak > CAP ? 'Peak went ' + num(a.peak - CAP) + ' over.' : num(CAP - a.peak) + ' spare at the fullest moment.')
     : 'Set a capacity to see headroom.';
