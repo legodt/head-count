@@ -148,11 +148,21 @@ clean. `local_time` is device time, `2026-09-12 9:05:03 PM`; `iso_timestamp` is
 UTC. Always the complete log; only the on-screen table is capped at 300.
 
 ## Door Read (`tools/analyze.html`)
-A separate single-file page for reading an exported CSV after the night, far
-past what the phone shows: headline tiles, a written read, occupancy / flow /
-velocity / cumulative charts, phases split on 80% of peak, hour rows, a dwell
-estimate, and checks on the log itself. No
-dependencies but a web font; the file is parsed in the page and never uploaded.
+A separate single-file page for reading an exported CSV after the night, in one
+screen: five figures, a read of three sentences at most, then three charts that
+each answer a different question — **how full** (occupancy, the night's phases
+as bands, capacity as a dashed line), **the door that filled it** (arrivals up,
+exits down, net line, sharing the occupancy chart's time axis so the two read as
+one), and **how long people stayed** (dwell histogram, quartiles marked, bins
+starting where the data starts). Integrity flags are one row of chips; hour rows
+and the tap log fold away. No dependencies but a web font; the file is parsed in
+the page and never uploaded.
+
+**Redundancy is the thing to resist.** A cumulative in/out chart only redraws
+the gap under the occupancy curve, a velocity chart only redraws the flow bars
+with one subtraction done, and a phases panel only restates the shape the
+occupancy curve already has. All three were cut, and the page went from roughly
+4,300px of scroll to 1,200.
 
 - Times are shown **as they were at the door**: `local_time` minus `epoch_ms`
   recovers the event's UTC offset per row, so a reader in another zone — or a
@@ -223,8 +233,9 @@ marker and flow buckets across midnight; tiles, narrative, card, table, CSV);
 and a live session with the device clock run through 12:00 AM.
 
 `tests/analyze.py` builds a night in Python, exports it as a Head Count CSV and
-opens Door Read on it from a browser in another time zone: the headline numbers
-must match the Python, the peak must read in the door's clock and not the
-reader's, every section, chart, hour row, check and log row must render, hover
-and the capacity line must work, and neither theme nor a 390px phone may scroll
-sideways.
+opens Door Read on it from a browser in another time zone: the five figures must
+match the Python, the peak must read in the door's clock and not the reader's,
+there must be exactly three charts in order and three sections, hour rows and
+the tap log must be present but folded, the read must stay within three
+sentences, hover and capacity must work, the page may make no group claim, and
+neither theme nor a 390px phone may scroll sideways.

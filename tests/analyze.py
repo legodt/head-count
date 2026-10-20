@@ -5,9 +5,11 @@ here rather than read back from the page.
 
 Feeds it a Head Count CSV recorded in UTC+10 while the browser sits in Chicago,
 so the times on screen prove the door's own zone is used, not the reader's.
-Checks the headline numbers, that every section, chart, row and check renders,
-that hover and the capacity line work, and that neither theme nor a 390px phone
-scrolls sideways. Needs playwright. Exits non-zero on any failure."""
+Checks the headline figures, that the three charts and the folded tables
+render, that hover and the capacity input work, that the page makes no group or
+door-pressure claims, and that neither theme nor a 390px phone scrolls
+sideways. Needs playwright. Exits non-zero on any failure.
+"""
 import datetime as dt
 import pathlib
 import sys
@@ -57,7 +59,6 @@ expect = {
     "peak inside": f"{peak:,}",
     "door open": f"{span_min // 60}h {span_min % 60}m" if span_min % 60 else f"{span_min // 60}h",
     "turnover": f"{tin / peak:.1f}×",
-    "guests out": f"{tout:,}",
 }
 peak_hm = dt.datetime.fromtimestamp(peak_at / 1000, TZ)
 expect_peak_at = f"at {peak_hm.hour % 12 or 12}:{peak_hm.minute:02d} {'AM' if peak_hm.hour < 12 else 'PM'}"
@@ -72,7 +73,7 @@ for i, (t, d) in enumerate(ev):
     h12 = f"{loc.hour % 12 or 12}:{loc.minute:02d}:{loc.second:02d} {'AM' if loc.hour < 12 else 'PM'}"
     iso = dt.datetime.fromtimestamp(t / 1000, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{t % 1000:03d}Z"
     rows.append(f"{i+1},{iso},{loc:%Y-%m-%d} {h12},{t},{(t-t0)/1000:.3f},,{'IN' if d > 0 else 'OUT'},{d},{occ},{ci},{co}")
-CSV.write_text("\ufeff" + "\r\n".join(rows) + "\r\n", encoding="utf-8")
+CSV.write_text("﻿" + "\r\n".join(rows) + "\r\n", encoding="utf-8")
 print(f"known night: {tin} in, {tout} out, peak {peak} at {expect_peak_at}, span {span_min} min, {len(ev)} taps")
 
 failures = []
@@ -95,49 +96,61 @@ with sync_playwright() as pw:
     pg.on("console", lambda m: errs.append("console: " + m.text) if m.type == "error" else None)
 
     pg.goto(PAGE)
-    pg.wait_for_selector("#tiles .tile")
+    pg.wait_for_selector("#strip .fig")
     check("opens on a sample night", "Sample night" in pg.inner_text("#source"), pg.inner_text("#source")[:80])
 
     pg.set_input_files("#file", str(CSV))
     pg.wait_for_function("document.getElementById('source').textContent.includes('known-night')", timeout=5000)
-    tiles = pg.eval_on_selector_all("#tiles .tile", "ns => ns.map(n => [n.querySelector('span').textContent, n.querySelector('b').textContent, n.querySelector('i') ? n.querySelector('i').textContent : ''])")
-    got = {label: value for label, value, _ in tiles}
+    figs = pg.eval_on_selector_all("#strip .fig", "ns => ns.map(n => [n.querySelector('span').textContent, n.querySelector('b').textContent, n.querySelector('i') ? n.querySelector('i').textContent : ''])")
+    got = {label: value for label, value, _ in figs}
+    check("five figures, no more", len(figs) == 5, [f[0] for f in figs])
     for k, v in expect.items():
-        check(f"tile {k} = {v}", got.get(k) == v, got.get(k))
-    peak_note = next(n for l, v, n in tiles if l == "peak inside")
+        check(f"figure {k} = {v}", got.get(k) == v, got.get(k))
+    peak_note = next(n for l, v, n in figs if l == "peak inside")
     check(f"peak time shown as recorded at the door ({expect_peak_at})", peak_note == expect_peak_at, peak_note)
 
-    sections = pg.eval_on_selector_all("main section", "ns => ns.map(n => n.querySelector('h2').textContent)")
-    check("all six sections render", len(sections) == 6, sections)
-    check("charts above phases, hour rows below them",
-          sections[1] == "Occupancy and flow" and sections[2] == "Phases" and sections[3] == "The night in rows", sections)
+    layout = pg.evaluate("""() => ({
+      sections: [...document.querySelectorAll('main section')].map(s => s.id),
+      plots: [...document.querySelectorAll('.plot')].map(p => p.id),
+      svgs: document.querySelectorAll('.plot svg').length,
+      hours: document.querySelectorAll('#hours tbody tr').length,
+      chips: document.querySelectorAll('.chip').length,
+      log: document.querySelectorAll('#log tbody tr').length,
+      folded: [...document.querySelectorAll('details')].every(d => !d.open),
+    })""")
+    check("three sections: summary, charts, trust",
+          layout["sections"] == ["summary", "charts", "trust"], layout["sections"])
+    check("three charts, in order: how full, the door, how long",
+          layout["plots"] == ["plotOcc", "plotFlow", "plotDwell"] and layout["svgs"] == 3, layout["plots"])
+    check("hour rows and the tap log are present but folded away",
+          layout["hours"] >= 6 and layout["log"] > 100 and layout["folded"], layout)
+    check("four check chips", layout["chips"] == 4, layout["chips"])
+
+    read = pg.inner_text("#narrative")
+    check("the read is three sentences at most", read.count(".") <= 3, read)
     check("no group or door-pressure claims", "group" not in pg.inner_text("main").lower(),
           "bunching is set by trains and queue clearance, not by who came together")
-    counts = pg.evaluate("({ svgs: document.querySelectorAll('.plot svg').length, rows: document.querySelectorAll('#hours tbody tr').length, checks: document.querySelectorAll('.check').length, log: document.querySelectorAll('#log tbody tr').length })")
-    check("five charts, hour rows, checks and log drawn",
-          counts["svgs"] == 5 and counts["rows"] >= 6 and counts["checks"] == 4 and counts["log"] > 100, counts)
 
     pg.hover("#plotOcc")
-    pg.mouse.move(600, pg.evaluate("document.getElementById('plotOcc').getBoundingClientRect().top + 120"))
-    tip = pg.evaluate("document.querySelector('#plotOcc .tip')?.hidden === false ? document.querySelector('#plotOcc .tip').textContent : null")
+    pg.mouse.move(600, pg.evaluate("document.getElementById('plotOcc').getBoundingClientRect().top + 110"))
+    tip = pg.evaluate("""() => { const t = document.querySelector('#plotOcc .tip');
+                                 return t && !t.hidden ? t.textContent : null; }""")
     check("occupancy chart has a working hover readout", bool(tip), tip)
 
     pg.fill("#capacity", "250")
-    pg.wait_for_timeout(200)
-    check("capacity line changes the read", "capacity" in pg.inner_text("#occnote").lower(), pg.inner_text("#occnote"))
+    pg.wait_for_timeout(250)
+    hint = pg.inner_text("#caphint")
+    check("capacity feeds the headroom hint", "spare" in hint or "over" in hint, hint)
 
-    overflow = pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-    check("no horizontal scroll at 1180px", overflow)
+    check("no horizontal scroll at 1180px", pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
 
     pg.emulate_media(color_scheme="dark")
-    pg.wait_for_timeout(250)
-    pg.evaluate("render()")
-
     pg.set_viewport_size({"width": 390, "height": 900})
     pg.wait_for_timeout(400)
     pg.evaluate("render()")
-    narrow = pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
-    check("no horizontal scroll at 390px", narrow, pg.evaluate("document.documentElement.scrollWidth"))
+    check("no horizontal scroll at 390px",
+          pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"),
+          pg.evaluate("document.documentElement.scrollWidth"))
 
     check("no page errors", not errs, errs[:3])
     ctx.close()
