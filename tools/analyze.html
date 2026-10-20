@@ -205,7 +205,6 @@ td.word{font-family:var(--body);font-size:13px}
 
     <div class="panel">
       <div class="panelhead">
-        <span class="figtitle">How full, and the door that filled it</span>
         <span class="legend">
           <span><i class="swatch" style="background:var(--in)"></i>Inside / arrivals</span>
           <span><i class="swatch" style="background:var(--out)"></i>Exits</span>
@@ -653,22 +652,35 @@ function drawFlow(host, bs, a, unit) {
 
 /* ---------------- read ---------------- */
 
-// Two or three sentences, and only what the charts cannot say at a glance.
-// Every figure is bolded, so the sentence can be skimmed for its numbers and
-// read properly only if you want the shape around them.
+// Short sentences, one idea each, every figure bolded so the paragraph can be
+// skimmed for numbers first and read for the shape second. Plain words over
+// exact ones where the two compete: "stayed above 99" rather than "within a
+// fifth of peak", "filled 1.5 times over" rather than "turnover 1.5x".
 function narrate(a, cap) {
   const n = v => '<b>' + v + '</b>';
   const s = [];
-  s.push('Doors ran ' + n(spanOf(a.t0, a.t1)) + ' and ' + n(num(a.tin)) + ' guests came through, fullest at ' +
-    n(hm(a.peakAt)) + ' with ' + n(num(a.peak)) + ' inside' +
-    (cap ? ', ' + n(Math.round(a.peak / cap * 100) + '%') + ' of the ' + num(cap) + ' you allow' : '') + '.');
-  if (a.fullMs > 0) s.push('It held within a fifth of that peak for ' + n(durShort(a.fullMs)) + ', ' +
-    n(Math.round(a.fullMs / a.span * 100) + '%') + ' of the night, then took ' + n(durShort(a.t1 - a.peakAt)) + ' to clear' +
-    (a.halfOut ? ', half of it gone by ' + n(hm(a.halfOut)) : '') + '.');
-  const turned = 'the room turned over ' + n(a.turnover.toFixed(1) + '×');
-  if (a.stays.length) s.push('The average guest stayed about ' + n(durShort(a.p50)) + ', one in ten past ' +
-    n(durShort(a.p90)) + ', and ' + turned + '.');
-  else s.push('Across the night ' + turned + '.');
+
+  s.push('The door was open ' + n(spanOf(a.t0, a.t1)) + ', and ' + n(num(a.tin)) + ' guests came in.');
+
+  let full = 'The room was fullest at ' + n(hm(a.peakAt)) + ' with ' + n(num(a.peak)) + ' inside';
+  if (cap && a.peak > cap) full += ', ' + n(num(a.peak - cap)) + ' over your limit of ' + num(cap);
+  else if (cap && a.peak === cap) full += ', exactly your limit';
+  else if (cap) full += ', ' + n(num(cap - a.peak)) + ' under your limit of ' + num(cap);
+  s.push(full + '.');
+
+  const shape = [];
+  if (a.fullMs > 0) shape.push('It stayed above ' + n(num(Math.round(a.peak * 0.8))) + ' for ' +
+    n(durShort(a.fullMs)) + ', about ' + n(Math.round(a.fullMs / a.span * 100) + '%') + ' of the night');
+  if (a.halfOut) shape.push((shape.length ? 'and was ' : 'It was ') + 'half empty again by ' + n(hm(a.halfOut)));
+  if (shape.length) s.push(shape.join(', ') + '.');
+
+  const over = a.turnover >= 1.15
+    ? 'the room filled about ' + n(a.turnover.toFixed(1)) + ' times over'
+    : 'that was about one roomful all night';
+  if (a.stays.length) s.push('The average guest stayed about ' + n(durShort(a.p50)) +
+    ', one in ten stayed past ' + n(durShort(a.p90)) + ', and ' + over + '.');
+  else if (a.tin) s.push(over.charAt(0).toUpperCase() + over.slice(1) + '.');
+
   return s.join(' ');
 }
 

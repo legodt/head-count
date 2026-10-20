@@ -149,11 +149,16 @@ with sync_playwright() as pw:
 
     read = pg.inner_text("#narrative")
     sentences = len(re.findall(r"[.!?](?:\s|$)", read))
-    check("the read is three sentences at most", sentences <= 3, f"{sentences}: {read}")
+    check("the read stays within four short sentences", sentences <= 4, f"{sentences}: {read}")
+    longest = max(len(x.strip()) for x in re.split(r"(?<=[.!?])\s", read) if x.strip())
+    check("no sentence runs long", longest <= 150, longest)
     bolded = pg.eval_on_selector_all("#narrative b", "ns => ns.map(n => n.textContent)")
     check("its figures are bolded for skimming", len(bolded) >= 5, bolded)
     check("it speaks of the average guest", "The average guest stayed" in read, read[-90:])
-    check(f"turnover moved into the prose ({tin / peak:.1f}×)", f"{tin / peak:.1f}×" in read, read[-90:])
+    check("the capacity limit is read in guests, not percent",
+          "over your limit of 115" in read and "%" not in read.split("fullest")[1].split(".")[0], read[:150])
+    check(f"turnover is told in words ({tin / peak:.1f} times over)",
+          f"{tin / peak:.1f} times over" in read, read[-90:])
     check("no group or door-pressure claims", "group" not in pg.inner_text("main").lower(),
           "bunching is set by trains and queue clearance, not by who came together")
 
