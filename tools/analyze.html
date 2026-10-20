@@ -199,7 +199,7 @@ td.word{font-family:var(--body);font-size:13px}
           <option value="3600000">1 hour</option>
         </select>
       </label>
-      <label>Capacity <input type="number" id="capacity" min="0" step="10" placeholder="none"></label>
+      <label>Capacity <input type="number" id="capacity" min="0" step="5" value="115" placeholder="none"></label>
       <span class="hint" id="caphint"></span>
     </div>
 
@@ -397,23 +397,11 @@ function analyse(ev) {
   let halfOut = null;
   for (let i = 0; i < series.length; i++) if (series[i].t >= peakAt && series[i].o <= peak / 2) { halfOut = series[i].t; break; }
 
-  const best = (times, win) => {
-    if (!times.length) return null;
-    let n = 0, at = times[0], j = 0;
-    for (let i = 0; i < times.length; i++) {
-      while (times[i] - times[j] > win) j++;
-      if (i - j + 1 > n) { n = i - j + 1; at = times[j]; }
-    }
-    return { n, from: at, to: at + win, rate: n / (win / 3600000) };
-  };
-
   // one guest in, one guest out, oldest first: an average that is honest, an individual that is not
   const queue = [], stays = [];
-  let unmatchedExits = 0;
   for (const e of ev) {
     if (e.d > 0) queue.push(e.t);
     else if (queue.length) stays.push(e.t - queue.shift());
-    else unmatchedExits++;
   }
   stays.sort((a, b) => a - b);
   const pct = q => stays.length ? stays[Math.min(stays.length - 1, Math.floor(q * stays.length))] : 0;
@@ -425,16 +413,13 @@ function analyse(ev) {
   let doubles = 0;
   for (let i = 1; i < ev.length; i++) if (ev[i].d === ev[i - 1].d && ev[i].t - ev[i - 1].t < 300) doubles++;
 
-  const win = Math.min(3600000, Math.max(300000, Math.round(span / 6)));
   return {
-    t0, t1, span, series, ins, outs, peak, peakAt, low, lowAt, negMs,
-    tin: ins.length, tout: outs.length, inside: occ,
-    area, avgStay: ins.length ? area / ins.length : 0, avgOcc: area / span,
+    t0, t1, span, series, peak, peakAt, low, lowAt, negMs,
+    tin: ins.length, avgStay: ins.length ? area / ins.length : 0,
     turnover: peak ? ins.length / peak : 0,
     medianIn: ins.length ? ins[Math.ceil(ins.length / 2) - 1] : null,
-    thr, fullFrom, fullTo, fullMs, halfOut,
-    surgeIn: best(ins, win), surgeOut: best(outs, win), win,
-    stays, p25: pct(0.25), p50: pct(0.5), p75: pct(0.75), p90: pct(0.9), unmatchedExits,
+    fullFrom, fullTo, fullMs, halfOut,
+    stays, p50: pct(0.5), p90: pct(0.9),
     gap, doubles,
   };
 }
@@ -639,20 +624,23 @@ function narrate(a, cap) {
   if (a.fullMs > 0) s.push('It held within a fifth of that peak for ' + n(durShort(a.fullMs)) + ', ' +
     n(Math.round(a.fullMs / a.span * 100) + '%') + ' of the night, then took ' + n(durShort(a.t1 - a.peakAt)) + ' to clear' +
     (a.halfOut ? ', half of it gone by ' + n(hm(a.halfOut)) : '') + '.');
-  if (a.stays.length) s.push('A guest stayed about ' + n(durShort(a.p50)) + ', one in ten past ' + n(durShort(a.p90)) +
-    (a.turnover >= 1.35 ? ', and the room turned over ' + n(a.turnover.toFixed(1) + '×') : '') + '.');
+  const turned = 'the room turned over ' + n(a.turnover.toFixed(1) + '×');
+  if (a.stays.length) s.push('The average guest stayed about ' + n(durShort(a.p50)) + ', one in ten past ' +
+    n(durShort(a.p90)) + ', and ' + turned + '.');
+  else s.push('Across the night ' + turned + '.');
   return s.join(' ');
 }
 
 /* ---------------- render ---------------- */
 
-let A = null, CAP = 0, NAME = '', SAMPLE = false, ZONE_NOTE = '';
+let A = null, CAP = 115, NAME = '', SAMPLE = false, ZONE_NOTE = '', resizeT = null;
 
 const fig = (v, label, note, cls) =>
   '<div class="fig' + (cls ? ' ' + cls : '') + '"><b>' + esc(v) + '</b><span>' + esc(label) + '</span>' +
   (note ? '<i>' + esc(note) + '</i>' : '') + '</div>';
 
 function render() {
+  $('report').hidden = false;          // before drawing: a hidden host measures 0 wide
   const a = A, unit = +$('bucket').value;
   const bs = buckets(EV, unit, a.t0, a.t1);
 
@@ -664,7 +652,6 @@ function render() {
     fig(num(a.tin), 'guests in', 'half in by ' + hm(a.medianIn), 'in'),
     fig(num(a.peak), 'peak inside', 'at ' + hm(a.peakAt)),
     fig(durShort(a.avgStay), 'average stay', 'time inside ÷ arrivals'),
-    fig(a.turnover.toFixed(1) + '×', 'turnover', num(a.tin) + ' through ' + num(a.peak) + ' places'),
   ].join('');
 
   $('narrative').innerHTML = narrate(a, CAP);
@@ -680,8 +667,6 @@ function render() {
     [a.low >= 0, a.low < 0 ? 'Count went ' + num(-a.low) + ' below zero' : 'Never below zero',
       a.low < 0 ? durShort(a.negMs) + ' negative, lowest ' + hm(a.lowAt) : ''],
     [a.gap.ms < 1800000, 'Quietest spell ' + durShort(a.gap.ms), 'from ' + hm(a.gap.at)],
-    [a.inside === 0, a.inside ? num(Math.abs(a.inside)) + (a.inside > 0 ? ' still inside at the end' : ' unexplained exits') : 'Balanced to zero',
-      a.inside > 0 ? 'counting stopped first, or exits were missed' : ''],
   ];
   $('checks').innerHTML = checks.map(c => '<span class="chip' + (c[0] ? '' : ' flag') + '"><i class="dot"></i>' +
     esc(c[1]) + (c[2] ? ' <em>' + esc(c[2]) + '</em>' : '') + '</span>').join('');
@@ -707,7 +692,23 @@ function render() {
     'wrong for any individual. The log counts bodies through a door — it never identifies anyone, cannot tell a re-entry ' +
     'from a new guest, and ends at the last tap rather than when the room actually closed.';
 
-  $('report').hidden = false;
+  watchWidth();
+}
+
+// Redraw when the charts' own column changes width, not just when the window
+// does: a tab that lays out late, or a pane that is resized, must not be left
+// with charts drawn for a width the page no longer has.
+let ro = null, lastW = 0;
+function watchWidth() {
+  lastW = $('plotOcc').clientWidth;
+  if (ro || !window.ResizeObserver) return;
+  ro = new ResizeObserver(entries => {
+    const w = Math.round(entries[0].contentRect.width);
+    if (!A || !w || w === lastW) return;
+    clearTimeout(resizeT);
+    resizeT = setTimeout(render, 80);
+  });
+  ro.observe($('plotOcc'));
 }
 
 /* ---------------- loading ---------------- */
@@ -802,7 +803,6 @@ $('copy').addEventListener('click', async () => {
   setTimeout(() => { $('copy').textContent = 'Copy'; }, 2000);
 });
 
-let resizeT;
 window.addEventListener('resize', () => { if (!A) return; clearTimeout(resizeT); resizeT = setTimeout(render, 160); });
 
 load(sampleCsv(), 'Sample night', true);

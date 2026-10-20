@@ -149,7 +149,7 @@ UTC. Always the complete log; only the on-screen table is capped at 300.
 
 ## Door Read (`tools/analyze.html`)
 A separate single-file page for reading an exported CSV after the night, in one
-screen: four figures, a read of three sentences at most with every figure in it
+screen: three figures, a read of three sentences at most with every figure in it
 bolded for skimming, then two charts — **how full** (occupancy, the night's
 phases as shaded bands, capacity as a dashed line) and **the door that filled
 it** (arrivals up, exits down, net line), sharing one time axis so they read as
@@ -171,7 +171,18 @@ needed. The page went from roughly 4,300px of scroll to around 1,000.
   column and an IN/OUT or ±1 column.
 - Dwell pairs each exit with the earliest guest still inside: right on average,
   wrong for any individual, and labelled as such on the page.
-- The CSV carries no end time, so the night ends at the last tap.
+- The CSV carries no end time, so the night ends at the last tap. **Guests
+  still counted inside at the end are therefore normal, not a fault** — the
+  counter is stopped before the room empties — so nothing flags it.
+- `render()` unhides the report **before** it draws. A hidden host measures
+  0 wide, so every chart took its 300px floor and CSS stretched it to full
+  width — giant text, two axis ticks. A `ResizeObserver` on the first plot
+  redraws when that column's width changes, so a tab that lays out late is
+  caught too. `tests/analyze.py` compares each chart's drawn width against its
+  shown width on the first paint.
+- Capacity defaults to **115**, the room this is for. Turnover is told in the
+  read rather than given a figure of its own: it is a ratio of two numbers the
+  same sentence already states.
 - **No group or door-pressure claims.** How tightly taps bunch is set by train
   arrivals and how fast the queue is cleared, not by who came with whom, so
   group size, average group and busiest-minute were cut rather than left to be
@@ -236,6 +247,7 @@ and a live session with the device clock run through 12:00 AM.
 opens Door Read on it from a browser in another time zone: the five figures must
 match the Python, the peak must read in the door's clock and not the reader's,
 there must be exactly two charts in order and three sections, hour rows and the
-tap log must be present but folded, the read must stay within three sentences
-and bold its figures, hover and capacity must work, the page may make no group claim, and
+tap log must be present but folded, the read must stay within three sentences,
+bold its figures, speak of the average guest and carry the turnover, capacity
+must start at 115, hover and capacity must work, the page may make no group claim, and
 neither theme nor a 390px phone may scroll sideways.

@@ -12,6 +12,7 @@ sideways. Needs playwright. Exits non-zero on any failure.
 """
 import datetime as dt
 import pathlib
+import re
 import sys
 import tempfile
 
@@ -57,7 +58,6 @@ span_min = round((t1 - t0) / 60000)
 expect = {
     "guests in": f"{tin:,}",
     "peak inside": f"{peak:,}",
-    "turnover": f"{tin / peak:.1f}×",
 }
 peak_hm = dt.datetime.fromtimestamp(peak_at / 1000, TZ)
 expect_peak_at = f"at {peak_hm.hour % 12 or 12}:{peak_hm.minute:02d} {'AM' if peak_hm.hour < 12 else 'PM'}"
@@ -97,12 +97,18 @@ with sync_playwright() as pw:
     pg.goto(PAGE)
     pg.wait_for_selector("#strip .fig")
     check("opens on a sample night", "Sample night" in pg.inner_text("#source"), pg.inner_text("#source")[:80])
+    # a chart drawn while its host is hidden measures 0 wide, takes the 300px
+    # floor, and is then stretched by CSS into giant text and two axis ticks
+    paint = pg.evaluate("""() => { const s = document.querySelector('#plotOcc svg'), r = s.getBoundingClientRect();
+                                   return { drawn: +s.getAttribute('width'), shown: Math.round(r.width) }; }""")
+    check("charts are drawn at the width they are shown at, on the first paint",
+          abs(paint["drawn"] - paint["shown"]) <= 2, paint)
 
     pg.set_input_files("#file", str(CSV))
     pg.wait_for_function("document.getElementById('source').textContent.includes('known-night')", timeout=5000)
     figs = pg.eval_on_selector_all("#strip .fig", "ns => ns.map(n => [n.querySelector('span').textContent, n.querySelector('b').textContent, n.querySelector('i') ? n.querySelector('i').textContent : ''])")
     got = {label: value for label, value, _ in figs}
-    check("four figures, no more", len(figs) == 4, [f[0] for f in figs])
+    check("three figures, no more", len(figs) == 3, [f[0] for f in figs])
     for k, v in expect.items():
         check(f"figure {k} = {v}", got.get(k) == v, got.get(k))
     peak_note = next(n for l, v, n in figs if l == "peak inside")
@@ -123,12 +129,17 @@ with sync_playwright() as pw:
           layout["plots"] == ["plotOcc", "plotFlow"] and layout["svgs"] == 2, layout["plots"])
     check("hour rows and the tap log are present but folded away",
           layout["hours"] >= 6 and layout["log"] > 100 and layout["folded"], layout)
-    check("four check chips", layout["chips"] == 4, layout["chips"])
+    check("three check chips, none of them the end balance", layout["chips"] == 3, layout["chips"])
+    check("the room ending with guests inside is not flagged",
+          "still inside" not in pg.inner_text("#checks"), pg.inner_text("#checks")[:90])
 
     read = pg.inner_text("#narrative")
-    check("the read is three sentences at most", read.count(".") <= 3, read)
+    sentences = len(re.findall(r"[.!?](?:\s|$)", read))
+    check("the read is three sentences at most", sentences <= 3, f"{sentences}: {read}")
     bolded = pg.eval_on_selector_all("#narrative b", "ns => ns.map(n => n.textContent)")
     check("its figures are bolded for skimming", len(bolded) >= 5, bolded)
+    check("it speaks of the average guest", "The average guest stayed" in read, read[-90:])
+    check(f"turnover moved into the prose ({tin / peak:.1f}×)", f"{tin / peak:.1f}×" in read, read[-90:])
     check("no group or door-pressure claims", "group" not in pg.inner_text("main").lower(),
           "bunching is set by trains and queue clearance, not by who came together")
 
@@ -138,10 +149,13 @@ with sync_playwright() as pw:
                                  return t && !t.hidden ? t.textContent : null; }""")
     check("occupancy chart has a working hover readout", bool(tip), tip)
 
+    check("capacity starts at the room this is for",
+          pg.input_value("#capacity") == "115" and "over" in pg.inner_text("#caphint"),
+          pg.input_value("#capacity") + " / " + pg.inner_text("#caphint"))
     pg.fill("#capacity", "250")
     pg.wait_for_timeout(250)
     hint = pg.inner_text("#caphint")
-    check("capacity feeds the headroom hint", "spare" in hint or "over" in hint, hint)
+    check("changing it feeds the headroom hint", "spare" in hint or "over" in hint, hint)
 
     check("no horizontal scroll at 1180px", pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
 
